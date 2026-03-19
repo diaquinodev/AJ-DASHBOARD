@@ -71,10 +71,26 @@ function salvarCatalogoUpSeller(skus) {
   console.log(`   [UpSeller] Catálogo salvo: ${skus.length} SKUs`);
 }
 
-// Normaliza uma chave para matching (remove zeros à esquerda, lowercase, trim)
+// Remove acentos para matching (salmão→salmao, lilás→lilas, onça→onca)
+function removerAcentos(str) {
+  return str.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+}
+
+// Normaliza uma chave para matching (remove zeros à esquerda, acentos, lowercase, trim)
 function normalizarChaveMatch(ref, cor, tam) {
   const refNorm = String(parseInt(ref) || ref).trim();
-  const corNorm = cor.toLowerCase().replace(/\s+/g, ' ').replace(/\bbb\b/g, 'bb').trim();
+  const corNorm = removerAcentos(cor.toLowerCase())
+    .replace(/\s+/g, ' ')
+    .replace(/\bbb\b/g, 'bb')
+    .replace(/\brc\b/g, '')   // remove sufixo RC
+    .replace(/\brg\b/g, '')   // remove sufixo RG
+    .replace(/\bristre?a?\b/g, '')  // remove "risca/ristra"
+    .replace(/\bristado\b/g, '')
+    .replace(/\blistrado\b/g, '')
+    .replace(/\bestampado\b/g, '')
+    .replace(/\bliso\b/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
   const tamNorm = (tam || '').toUpperCase().trim();
   return `${refNorm}|${corNorm}|${tamNorm}`;
 }
@@ -122,6 +138,38 @@ function construirMapaBling(produtos) {
     }
   }
   return mapa;
+}
+
+// Busca um produto Bling no mapa com fallback de matching flexível
+function buscarNoMapaBling(mapaBling, ref, cor, tam) {
+  // 1. Tentativa exata
+  const chaveExata = normalizarChaveMatch(ref, cor, tam);
+  if (mapaBling.has(chaveExata)) return mapaBling.get(chaveExata);
+
+  // 2. Tentativa sem tamanho (para produtos sem variação de tamanho)
+  if (tam) {
+    const chaveSemTam = normalizarChaveMatch(ref, cor, '');
+    if (mapaBling.has(chaveSemTam)) return mapaBling.get(chaveSemTam);
+  }
+
+  // 3. Busca parcial - cor do UpSeller contida na cor do Bling ou vice-versa
+  const refNorm = String(parseInt(ref) || ref).trim();
+  const corNormBusca = removerAcentos(cor.toLowerCase()).replace(/\s+/g, ' ').trim();
+  const tamNorm = (tam || '').toUpperCase().trim();
+
+  for (const [chave, produto] of mapaBling) {
+    const partes = chave.split('|');
+    if (partes[0] !== refNorm) continue;
+    if (tamNorm && partes[2] && partes[2] !== tamNorm) continue;
+
+    const corMapa = partes[1];
+    // Checa se uma cor contém a outra (para truncamentos como "pistach" vs "pistache")
+    if (corMapa.includes(corNormBusca) || corNormBusca.includes(corMapa)) {
+      return produto;
+    }
+  }
+
+  return null;
 }
 
 function lerCatalogoDoDisco() {
@@ -599,11 +647,12 @@ function blingParaSkuUpSeller(nomeBling) {
     const matchTam = nomeBling.match(/\bTAMANHO[:\s]+([^,;\s]+)/i);
     let tam = matchTam ? matchTam[1].trim().toUpperCase() : null;
 
-    // 4. Converte cor para Title Case
-    cor = cor.toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
+    // 4. Converte cor para Title Case (tratando acentos corretamente)
+    cor = cor.toLowerCase().replace(/(^|\s)\S/g, c => c.toUpperCase());
 
-    // 5. Aplica abreviações conhecidas
-    cor = cor.replace(/\bBebe\b/g, 'BB');
+    // 5. Aplica abreviações e correções conhecidas
+    cor = cor.replace(/\bBebe\b/gi, 'BB');
+    cor = cor.replace(/\bBb\b/g, 'BB');
 
     // 6. Monta o SKU: REF-Cor ou REF-Cor-TAM
     let sku = `${ref}-${cor}`;
@@ -810,12 +859,12 @@ app.get('/api/exportar-upseller', async (req, res) => {
                     continue;
                 }
 
-                const chave = normalizarChaveMatch(parsed.ref, parsed.cor, parsed.tam);
-                const produtoBling = mapaBling.get(chave);
+                const produtoBling = buscarNoMapaBling(mapaBling, parsed.ref, parsed.cor, parsed.tam);
 
                 if (!produtoBling) {
                     qtdSemMatch++;
-                    logConteudo += `[SEM MATCH] ${skuReal} → chave: ${chave}\n`;
+                    const chaveDebug = normalizarChaveMatch(parsed.ref, parsed.cor, parsed.tam);
+                    logConteudo += `[SEM MATCH] ${skuReal} → chave: ${chaveDebug}\n`;
                     // Inclui na planilha com estoque 0 para não perder o SKU
                     dadosPlanilha.push([skuReal, "", 0, ""]);
                     continue;
