@@ -49,7 +49,80 @@ let cachePedidosRecentes = [];
 
 // 📁 CACHE EM DISCO — Catálogo salvo em arquivo para carregamento instantâneo
 const CATALOGO_CACHE_FILE = path.join(__dirname, "catalogo-cache.json");
+const UPSELLER_CATALOGO_FILE = path.join(__dirname, "upseller-catalogo.json");
 let sincronizandoCatalogo = false;
+
+// 📁 CATÁLOGO UPSELLER — Lista de SKUs reais da UpSeller para matching exato
+function lerCatalogoUpSeller() {
+  try {
+    if (fs.existsSync(UPSELLER_CATALOGO_FILE)) {
+      const data = JSON.parse(fs.readFileSync(UPSELLER_CATALOGO_FILE, "utf8"));
+      return data;
+    }
+  } catch (e) {
+    console.error("   [UpSeller] Erro ao ler catálogo:", e.message);
+  }
+  return null;
+}
+
+function salvarCatalogoUpSeller(skus) {
+  const dados = { skus, atualizadoEm: Date.now(), total: skus.length };
+  fs.writeFileSync(UPSELLER_CATALOGO_FILE, JSON.stringify(dados, null, 2));
+  console.log(`   [UpSeller] Catálogo salvo: ${skus.length} SKUs`);
+}
+
+// Normaliza uma chave para matching (remove zeros à esquerda, lowercase, trim)
+function normalizarChaveMatch(ref, cor, tam) {
+  const refNorm = String(parseInt(ref) || ref).trim();
+  const corNorm = cor.toLowerCase().replace(/\s+/g, ' ').replace(/\bbb\b/g, 'bb').trim();
+  const tamNorm = (tam || '').toUpperCase().trim();
+  return `${refNorm}|${corNorm}|${tamNorm}`;
+}
+
+// Parseia um SKU da UpSeller (ex: "0010-Verde Militar-M") → { ref, cor, tam }
+function parseUpSellerSku(sku) {
+  if (!sku) return null;
+  const parts = sku.split('-');
+  if (parts.length < 2) return null;
+
+  const ref = parts[0].trim();
+  const tamanhos = ['P', 'M', 'G', 'GG', 'PP', 'EG', 'EGG', 'XG', 'XXG', 'U'];
+
+  // Checa se o último segmento é um tamanho
+  const ultimaParte = parts[parts.length - 1].trim().toUpperCase();
+  if (tamanhos.includes(ultimaParte) && parts.length >= 3) {
+    const cor = parts.slice(1, -1).join('-').trim();
+    return { ref, cor, tam: ultimaParte };
+  }
+
+  // Sem tamanho (ex: "101-Sortido", "0082-ZEBRA")
+  const cor = parts.slice(1).join('-').trim();
+  return { ref, cor, tam: '' };
+}
+
+// Constrói mapa de matching: chave normalizada → produto Bling
+function construirMapaBling(produtos) {
+  const mapa = new Map();
+  for (const p of produtos) {
+    if (!p.descricao) continue;
+    const matchRef = p.descricao.match(/^(\d+)/);
+    if (!matchRef) continue;
+    const ref = matchRef[1];
+
+    const matchCor = p.descricao.match(/\bCOR[:\s]+([^,;]+)/i);
+    if (!matchCor) continue;
+    const cor = matchCor[1].trim();
+
+    const matchTam = p.descricao.match(/\bTAMANHO[:\s]+([^,;\s]+)/i);
+    const tam = matchTam ? matchTam[1].trim() : '';
+
+    const chave = normalizarChaveMatch(ref, cor, tam);
+    if (!mapa.has(chave)) {
+      mapa.set(chave, p);
+    }
+  }
+  return mapa;
+}
 
 function lerCatalogoDoDisco() {
   try {
@@ -703,6 +776,7 @@ app.get('/api/exportar-upseller', async (req, res) => {
         let qtdSucesso = 0;
         let qtdZerado = 0;
         let qtdIgnorados = 0;
+        let qtdSemMatch = 0;
 
         // Cabeçalho exato da UpSeller (AOA = matriz)
         const dadosPlanilha = [
@@ -714,42 +788,93 @@ app.get('/api/exportar-upseller', async (req, res) => {
             ]
         ];
 
-        for (const p of produtos) {
-            // Converte nome Bling → SKU UpSeller
-            const skuUpSeller = blingParaSkuUpSeller(p.descricao);
+        // Verifica se existe catálogo UpSeller salvo
+        const catalogoUpSeller = lerCatalogoUpSeller();
+        const usarCatalogoReal = catalogoUpSeller && catalogoUpSeller.skus && catalogoUpSeller.skus.length > 0;
 
-            if (!skuUpSeller) {
-                qtdIgnorados++;
-                logConteudo += `[IGNORADO] Produto-pai sem COR: ${p.descricao}\n`;
-                continue;
+        if (usarCatalogoReal) {
+            // ====== MODO CATÁLOGO REAL ======
+            // Usa os SKUs exatos da UpSeller e faz matching com Bling
+            console.log(`   [UpSeller] Modo CATÁLOGO REAL: ${catalogoUpSeller.skus.length} SKUs do armazém`);
+            logConteudo += `MODO: Catálogo Real UpSeller (${catalogoUpSeller.skus.length} SKUs)\n\n`;
+
+            // Constrói mapa normalizado dos produtos Bling
+            const mapaBling = construirMapaBling(produtos);
+            console.log(`   [UpSeller] Mapa Bling construído: ${mapaBling.size} variações mapeadas`);
+
+            for (const skuReal of catalogoUpSeller.skus) {
+                const parsed = parseUpSellerSku(skuReal);
+                if (!parsed) {
+                    qtdIgnorados++;
+                    logConteudo += `[IGNORADO] SKU não parseável: ${skuReal}\n`;
+                    continue;
+                }
+
+                const chave = normalizarChaveMatch(parsed.ref, parsed.cor, parsed.tam);
+                const produtoBling = mapaBling.get(chave);
+
+                if (!produtoBling) {
+                    qtdSemMatch++;
+                    logConteudo += `[SEM MATCH] ${skuReal} → chave: ${chave}\n`;
+                    // Inclui na planilha com estoque 0 para não perder o SKU
+                    dadosPlanilha.push([skuReal, "", 0, ""]);
+                    continue;
+                }
+
+                const quantidadeReal = parseInt(produtoBling.saldoFisicoTotal) || 0;
+                let quantidadeUpSeller = 0;
+
+                if (quantidadeReal > 0) {
+                    quantidadeUpSeller = baseFake + quantidadeReal;
+                    qtdSucesso++;
+                } else {
+                    qtdZerado++;
+                    logConteudo += `[ZERADO] ${skuReal} — Bling: ${produtoBling.descricao}\n`;
+                }
+
+                dadosPlanilha.push([skuReal, "", quantidadeUpSeller, ""]);
             }
+        } else {
+            // ====== MODO LEGADO (geração de SKU) ======
+            console.log(`   [UpSeller] Modo LEGADO: gerando SKUs a partir dos nomes Bling`);
+            logConteudo += `MODO: Geração automática de SKU (sem catálogo UpSeller)\n\n`;
 
-            // Limpeza de segurança (chars invisíveis)
-            const skuLimpo = skuUpSeller
-                .replace(/[\u200B\u200C\u200D\uFEFF\u00A0]/g, '')
-                .trim();
+            for (const p of produtos) {
+                const skuUpSeller = blingParaSkuUpSeller(p.descricao);
 
-            const quantidadeReal = parseInt(p.saldoFisicoTotal) || 0;
-            let quantidadeUpSeller = 0;
+                if (!skuUpSeller) {
+                    qtdIgnorados++;
+                    logConteudo += `[IGNORADO] Produto-pai sem COR: ${p.descricao}\n`;
+                    continue;
+                }
 
-            if (quantidadeReal > 0) {
-                quantidadeUpSeller = baseFake + quantidadeReal;
-                qtdSucesso++;
-            } else {
-                qtdZerado++;
-                logConteudo += `[ZERADO] ${skuLimpo} — ${p.descricao}\n`;
+                const skuLimpo = skuUpSeller
+                    .replace(/[\u200B\u200C\u200D\uFEFF\u00A0]/g, '')
+                    .trim();
+
+                const quantidadeReal = parseInt(p.saldoFisicoTotal) || 0;
+                let quantidadeUpSeller = 0;
+
+                if (quantidadeReal > 0) {
+                    quantidadeUpSeller = baseFake + quantidadeReal;
+                    qtdSucesso++;
+                } else {
+                    qtdZerado++;
+                    logConteudo += `[ZERADO] ${skuLimpo} — ${p.descricao}\n`;
+                }
+
+                dadosPlanilha.push([skuLimpo, "", quantidadeUpSeller, ""]);
             }
-
-            dadosPlanilha.push([skuLimpo, "", quantidadeUpSeller, ""]);
         }
 
-        const totalExportados = qtdSucesso + qtdZerado;
+        const totalExportados = qtdSucesso + qtdZerado + qtdSemMatch;
 
         logConteudo += `\n====================================================\n`;
         logConteudo += `RESUMO:\n`;
         logConteudo += `- SKUs com Estoque Mascarado (+${baseFake}): ${qtdSucesso}\n`;
         logConteudo += `- SKUs Zerados (enviados como 0): ${qtdZerado}\n`;
-        logConteudo += `- Produtos-pai ignorados: ${qtdIgnorados}\n`;
+        if (qtdSemMatch > 0) logConteudo += `- SKUs SEM MATCH no Bling: ${qtdSemMatch}\n`;
+        logConteudo += `- Ignorados: ${qtdIgnorados}\n`;
         logConteudo += `- Total de linhas na planilha: ${totalExportados}\n`;
         logConteudo += `====================================================\n`;
 
@@ -857,6 +982,66 @@ app.post('/api/catalogo-sync', async (req, res) => {
   // Dispara em segundo plano, não bloqueia a resposta
   sincronizarCatalogoEmSegundoPlano();
   res.json({ status: 'iniciado', mensagem: 'Sincronização iniciada em segundo plano.' });
+});
+
+// ──────────────────────────────────────────────
+// 📤 UPLOAD DO CATÁLOGO UPSELLER (Excel do armazém)
+// ──────────────────────────────────────────────
+app.post('/api/upseller/upload-catalogo', upload.single('arquivo'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ erro: 'Nenhum arquivo enviado.' });
+    }
+
+    console.log(`\n📤 [UpSeller] Upload recebido: ${req.file.originalname} (${(req.file.size / 1024).toFixed(1)} KB)`);
+
+    const workbook = xlsx.read(req.file.buffer, { type: 'buffer' });
+    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+    const rows = xlsx.utils.sheet_to_json(sheet, { defval: '' });
+
+    if (!rows || rows.length === 0) {
+      return res.status(400).json({ erro: 'Planilha vazia ou formato inválido.' });
+    }
+
+    // Detecta a coluna de SKU (primeira coluna que contenha "SKU" no header)
+    const headers = Object.keys(rows[0]);
+    const skuCol = headers.find(h => h.toUpperCase().includes('SKU')) || headers[0];
+
+    const skus = [];
+    for (const row of rows) {
+      const sku = String(row[skuCol] || '').trim();
+      if (sku && sku.length > 1) {
+        skus.push(sku);
+      }
+    }
+
+    if (skus.length === 0) {
+      return res.status(400).json({ erro: 'Nenhum SKU encontrado na planilha.' });
+    }
+
+    salvarCatalogoUpSeller(skus);
+
+    console.log(`   [UpSeller] ${skus.length} SKUs importados do catálogo.`);
+    res.json({ sucesso: true, total: skus.length, amostra: skus.slice(0, 10) });
+
+  } catch (e) {
+    console.error('❌ [UpSeller] Erro no upload:', e.message);
+    res.status(500).json({ erro: 'Erro ao processar arquivo: ' + e.message });
+  }
+});
+
+// Rota para ver status do catálogo UpSeller
+app.get('/api/upseller/catalogo-status', (req, res) => {
+  const catalogo = lerCatalogoUpSeller();
+  if (!catalogo || !catalogo.skus || catalogo.skus.length === 0) {
+    return res.json({ temCatalogo: false, total: 0 });
+  }
+  res.json({
+    temCatalogo: true,
+    total: catalogo.skus.length,
+    atualizadoEm: catalogo.atualizadoEm,
+    amostra: catalogo.skus.slice(0, 5)
+  });
 });
 
 app.get('/api/wms/produto/:codigo', async (req, res) => {

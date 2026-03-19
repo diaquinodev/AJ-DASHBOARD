@@ -42,6 +42,11 @@
                     <button id="btnExportar" onclick="exportarUpSeller()" class="bg-emerald-600 hover:bg-emerald-700 text-white px-5 py-2.5 rounded-lg font-bold flex items-center justify-center gap-2 shadow-md hover:shadow-lg transition w-full sm:w-auto">
                         <i data-lucide="file-archive" class="w-5 h-5"></i> Exportar ZIP UpSeller
                     </button>
+
+                    <input type="file" id="inputCatalogoUpSeller" accept=".xlsx,.xls,.csv" style="display:none" onchange="uploadCatalogoUpSeller(this)">
+                    <button id="btnUploadCatalogo" onclick="document.getElementById('inputCatalogoUpSeller').click()" class="bg-violet-600 hover:bg-violet-700 text-white px-5 py-2.5 rounded-lg font-bold flex items-center justify-center gap-2 shadow-md hover:shadow-lg transition w-full sm:w-auto" title="Enviar planilha do armazém UpSeller para matching exato de SKUs">
+                        <i data-lucide="upload" class="w-5 h-5"></i> <span id="btnUploadTexto">Catálogo UpSeller</span>
+                    </button>
                     
                     <button id="btnAlerta" onclick="dispararAlertaManual()" class="bg-rose-600 hover:bg-rose-700 text-white px-5 py-2.5 rounded-lg font-bold flex items-center justify-center gap-2 shadow-md hover:shadow-lg transition w-full sm:w-auto">
                         <i data-lucide="send" id="btnAlertaIcon" class="w-5 h-5"></i> Alerta WhatsApp
@@ -143,6 +148,49 @@
                 lucide.createIcons();
             }
         }
+
+        async function uploadCatalogoUpSeller(input) {
+            if (!input.files || !input.files[0]) return;
+            const file = input.files[0];
+            const btn = document.getElementById('btnUploadCatalogo');
+            const textoOriginal = document.getElementById('btnUploadTexto').textContent;
+
+            document.getElementById('btnUploadTexto').textContent = 'Enviando...';
+            btn.disabled = true;
+
+            try {
+                const formData = new FormData();
+                formData.append('arquivo', file);
+                const resp = await fetch('/api/upseller/upload-catalogo', { method: 'POST', body: formData });
+                const data = await resp.json();
+
+                if (data.sucesso) {
+                    document.getElementById('btnUploadTexto').textContent = `${data.total} SKUs`;
+                    btn.classList.replace('bg-violet-600', 'bg-green-600');
+                    btn.classList.replace('hover:bg-violet-700', 'hover:bg-green-700');
+                    alert(`Catalogo UpSeller importado!\n${data.total} SKUs salvos.\n\nAgora a exportacao usara os SKUs exatos do seu armazem.`);
+                } else {
+                    alert('Erro: ' + (data.erro || 'Falha no upload'));
+                    document.getElementById('btnUploadTexto').textContent = textoOriginal;
+                }
+            } catch (e) {
+                alert('Erro ao enviar catalogo. Verifique o terminal.');
+                document.getElementById('btnUploadTexto').textContent = textoOriginal;
+            } finally {
+                btn.disabled = false;
+                input.value = '';
+            }
+        }
+
+        // Verifica se já existe catálogo UpSeller salvo
+        fetch('/api/upseller/catalogo-status').then(r => r.json()).then(data => {
+            if (data.temCatalogo) {
+                const btn = document.getElementById('btnUploadCatalogo');
+                document.getElementById('btnUploadTexto').textContent = `${data.total} SKUs`;
+                btn.classList.replace('bg-violet-600', 'bg-green-600');
+                btn.classList.replace('hover:bg-violet-700', 'hover:bg-green-700');
+            }
+        }).catch(() => {});
 
         async function dispararAlertaManual() {
             const btn = document.getElementById('btnAlerta');
