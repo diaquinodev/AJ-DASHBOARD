@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WMS | Conferência de Checkout</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700;900&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; transition: background-color 0.15s ease-out; background-color: #F8FAFC; }
+        .flash-success { background-color: #bbf7d0 !important; }
+        .flash-error { background-color: #fecaca !important; }
+        input:focus { box-shadow: 0 0 0 4px rgba(79, 70, 229, 0.2); }
+        .custom-scroll::-webkit-scrollbar { width: 6px; }
+        .custom-scroll::-webkit-scrollbar-thumb { background-color: #cbd5e1; border-radius: 4px; }
+    </style>
+</head>
+<body class="h-screen flex flex-col overflow-hidden text-slate-800">
+    <audio id="beep-success" src="https://actions.google.com/sounds/v1/ui/check_mark_complete.ogg" preload="auto"></audio>
+    <audio id="beep-error" src="https://actions.google.com/sounds/v1/alarms/beep_short.ogg" preload="auto"></audio>
+
+    <header class="bg-white border-b border-slate-200 px-8 py-4 flex justify-between items-center shadow-sm z-10">
+        <div class="flex items-center gap-3">
+            <div class="bg-indigo-600 p-2.5 rounded-xl shadow-md shadow-indigo-200"><i data-lucide="shield-check" class="text-white w-6 h-6"></i></div>
+            <div><h1 class="text-2xl font-black text-slate-900 tracking-tight leading-none">Checkout & Expedição</h1><p class="text-sm font-medium text-slate-500 mt-1">Conferência Híbrida: Bling + Planilhas</p></div>
+        </div>
+        <div class="flex items-center gap-4">
+            <input type="file" id="csv-upload" accept=".csv, .xlsx, .pdf" class="hidden" onchange="enviarCSV(event)">
+            <button onclick="document.getElementById('csv-upload').click()" class="flex items-center gap-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 px-4 py-2 rounded-lg font-bold text-sm transition-all border border-indigo-200 shadow-sm"><i data-lucide="file-text" class="w-4 h-4"></i> Carregar Ficheiros (Excel/PDF)</button>
+            <div id="status-badge" class="flex items-center gap-2 bg-blue-50 border border-blue-200 text-blue-700 px-4 py-2 rounded-full font-bold text-sm transition-all">
+                <span class="relative flex h-3 w-3"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span><span class="relative inline-flex rounded-full h-3 w-3 bg-blue-500"></span></span>
+                <span id="status-texto">Iniciando Sistema...</span>
+            </div>
+        </div>
+    </header>
+
+    <main class="flex-1 flex overflow-hidden">
+        <section class="w-1/3 bg-white border-r border-slate-200 p-8 flex flex-col relative z-20 shadow-[4px_0_24px_rgba(0,0,0,0.02)]">
+            <div id="box-pedido" class="mb-8 transition-all duration-300">
+                <label class="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2">1. Número do Pedido</label>
+                <div class="relative flex items-center">
+                    <i data-lucide="shopping-bag" class="absolute left-4 text-indigo-400 w-6 h-6"></i>
+                    <input type="text" id="input-pedido" placeholder="Bipe ou digite o Pedido..." class="w-full pl-12 pr-16 py-4 bg-slate-50 border-2 border-slate-200 rounded-2xl text-lg font-bold text-slate-800 outline-none transition-all placeholder:text-slate-400 focus:border-indigo-500 focus:bg-white">
+                    <button onclick="dispararBusca()" class="absolute right-2 bg-indigo-100 hover:bg-indigo-200 text-indigo-700 p-2 rounded-xl transition-colors"><i data-lucide="search" class="w-6 h-6"></i></button>
+                </div>
+            </div>
+            
+            <div id="box-produtos" class="hidden flex-col flex-1 opacity-0 transition-opacity duration-300">
+                
+                <div class="bg-indigo-50 border border-indigo-100 p-6 rounded-2xl mb-6 relative">
+                    <label class="block text-xs font-black text-indigo-400 uppercase tracking-widest mb-2">2. Conferir Peças Físicas</label>
+                    <div class="relative">
+                        <i data-lucide="barcode" class="absolute left-4 top-4 text-indigo-600 w-6 h-6 z-40"></i>
+                        <input type="text" id="input-produto" oninput="filtrarItensPedido()" placeholder="Bipe ou digite o SKU..." autocomplete="off" class="w-full pl-12 pr-4 py-4 bg-white border-2 border-indigo-200 rounded-2xl text-lg font-bold text-indigo-900 outline-none transition-all placeholder:text-indigo-300 focus:border-indigo-600 focus:ring-4 focus:ring-indigo-100 relative z-40">
+                        
+                        <ul id="resultado-busca-produto" class="absolute left-0 w-full bg-white border border-indigo-200 rounded-xl shadow-2xl mt-2 max-h-64 overflow-y-auto hidden z-50 custom-scroll"></ul>
+                    </div>
+                </div>
+
+                <div class="mt-auto bg-slate-50 p-6 rounded-2xl border border-slate-200">
+                    <div class="flex justify-between items-center mb-4"><span class="text-sm font-bold text-slate-500">Progresso</span><span id="texto-progresso" class="text-lg font-black text-indigo-600">0 / 0</span></div>
+                    <div class="w-full bg-slate-200 rounded-full h-3 overflow-hidden"><div id="barra-progresso" class="bg-indigo-600 h-3 rounded-full transition-all duration-500" style="width: 0%"></div></div>
+                    <button id="btn-finalizar" onclick="finalizarPacote()" disabled class="mt-6 w-full bg-emerald-500 hover:bg-emerald-600 disabled:bg-slate-300 disabled:cursor-not-allowed text-white font-black text-lg py-4 rounded-xl flex items-center justify-center gap-2 transition-all"><i data-lucide="package-check" class="w-6 h-6"></i> FINALIZAR PACOTE</button>
+                    <button onclick="resetarTela()" class="mt-3 w-full text-slate-400 hover:text-slate-600 text-sm font-bold py-2 transition-colors">Cancelar / Voltar</button>
+                </div>
+            </div>
+        </section>
+
+        <section class="flex-1 bg-slate-50/50 p-8 flex flex-col relative overflow-hidden">
+            <div class="flex justify-between items-end mb-6">
+                <div><h2 class="text-2xl font-black text-slate-800">Itens do Pedido</h2><p id="info-pedido" class="text-slate-500 font-medium mt-1">Nenhum pedido carregado</p></div>
+                <div id="badge-origem" class="hidden px-3 py-1 rounded-md text-xs font-black uppercase"></div>
+            </div>
+            <div class="flex-1 overflow-y-auto custom-scroll pr-2">
+                <ul id="lista-itens" class="space-y-4">
+                    <div id="lista-vazia" class="h-full flex flex-col items-center justify-center text-center mt-20">
+                        <div class="w-24 h-24 bg-white rounded-full flex items-center justify-center mb-4 shadow-sm border border-slate-100"><i data-lucide="scan-face" class="w-10 h-10 text-slate-300"></i></div>
+                        <p class="text-slate-400 font-medium">Bipe ou digite o número do pedido e aperte Enter.</p>
+                    </div>
+                </ul>
+            </div>
+        </section>
+    </main>
+
+    <script>
+        lucide.createIcons();
+        let pedidoAtual = null; 
+
+        window.onload = async () => {
+            alterarStatus("Sincronizando Bling...", 'buscando');
+            try {
+                const res = await fetch('/api/checkout/sincronizar');
+                const data = await res.json();
+                if(data.sucesso) alterarStatus("Sistema Pronto", 'sucesso');
+                else alterarStatus("Pronto (Apenas Ficheiros)", 'alerta');
+            } catch(e) { alterarStatus("Offline", 'erro'); }
+        };
+
+        // Mantém o foco e fecha a lista se clicar fora
+        document.addEventListener('click', (e) => {
+            if (e.target.closest('button')) return;
+            
+            if (!e.target.closest('#input-produto') && !e.target.closest('#resultado-busca-produto')) {
+                const listaDropdown = document.getElementById('resultado-busca-produto');
+                if (listaDropdown) listaDropdown.classList.add('hidden');
+            }
+
+            if (!document.getElementById('box-pedido').classList.contains('pointer-events-none')) {
+                if (!pedidoAtual) document.getElementById('input-pedido').focus();
+                else document.getElementById('input-produto').focus();
+            }
+        });
+
+        function dispararBusca() { const val = document.getElementById('input-pedido').value.trim(); if(val !== '') buscarPedidoAPI(val); }
+        document.getElementById('input-pedido').addEventListener('keypress', function(e) { if (e.key === 'Enter') dispararBusca(); });
+        
+        document.getElementById('input-produto').addEventListener('keypress', function(e) { 
+            if (e.key === 'Enter' && this.value.trim() !== '') { 
+                conferirPeça(this.value.trim()); 
+            }
+        });
+
+        // 👇 NOVA FUNÇÃO: ABRE A LISTA SUSPENSA INTELIGENTE COM O "FALTAM: X"
+        function filtrarItensPedido() {
+            const termo = document.getElementById('input-produto').value.toLowerCase().trim();
+            const listaDropdown = document.getElementById('resultado-busca-produto');
+            listaDropdown.innerHTML = '';
+
+            if (!pedidoAtual || termo.length === 0) {
+                listaDropdown.classList.add('hidden');
+                return;
+            }
+
+            // Procura dentro do pedido atual as peças que combinam com o que foi digitado
+            const filtrados = pedidoAtual.itens.filter(i =>
+                (String(i.sku).toLowerCase().includes(termo) || String(i.nome).toLowerCase().includes(termo)) &&
+                i.conferido < i.esperado
+            );
+
+            if (filtrados.length === 0) {
+                listaDropdown.innerHTML = `<li class="p-4 text-slate-500 text-center font-medium text-sm">Nenhuma peça pendente combina com "${termo}".</li>`;
+            } else {
+                filtrados.forEach(item => {
+                    const faltam = item.esperado - item.conferido;
+                    listaDropdown.innerHTML += `
+                        <li onclick="selecionarItemManual('${item.sku}')" class="p-4 hover:bg-indigo-50 border-b border-indigo-50 cursor-pointer flex justify-between items-center group transition-colors">
+                            <div class="flex-1 pr-4">
+                                <p class="font-bold text-slate-800 leading-tight text-sm">${item.nome}</p>
+                                <p class="text-xs font-mono text-slate-500 mt-1">SKU: ${item.sku}</p>
+                            </div>
+                            <div class="flex items-center gap-3">
+                                <span class="text-[10px] font-black text-orange-500 bg-orange-50 px-2 py-1 rounded tracking-wider uppercase border border-orange-100 shadow-sm">Faltam: ${faltam}</span>
+                                <span class="bg-indigo-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold transition opacity-0 group-hover:opacity-100 shadow-md">✓ Bipar</span>
+                            </div>
+                        </li>
+                    `;
+                });
+            }
+            listaDropdown.classList.remove('hidden');
+        }
+
+        // Função chamada quando o operador clica na listinha suspensa
+        function selecionarItemManual(skuExato) {
+            document.getElementById('input-produto').value = '';
+            document.getElementById('resultado-busca-produto').classList.add('hidden');
+            conferirPeça(skuExato); 
+            document.getElementById('input-produto').focus();
+        }
+
+        async function enviarCSV(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+            const formData = new FormData(); formData.append('arquivo', file);
+            try {
+                alterarStatus("Processando...", 'buscando');
+                const response = await fetch('/api/checkout/upload-csv', { method: 'POST', body: formData });
+                const result = await response.json();
+                if (result.sucesso) { alert(`✅ Memória atualizada!`); alterarStatus("Sistema Pronto", 'sucesso'); document.getElementById('input-pedido').focus(); } 
+                else { alert("Erro: " + result.erro); alterarStatus("Erro no ficheiro", 'erro'); }
+            } catch (e) { alert("Erro de conexão."); alterarStatus("Erro", 'erro'); }
+            event.target.value = ''; 
+        }
+
+        async function buscarPedidoAPI(numeroPedido) {
+            alterarStatus(`Buscando ${numeroPedido}...`, 'buscando');
+            document.getElementById('input-pedido').disabled = true;
+            try {
+                const response = await fetch(`/api/checkout/pedido/${numeroPedido}`);
+                const data = await response.json();
+                if (data.erro) { tocarErro(); alert(data.erro); resetarTela(); return; }
+                pedidoAtual = data; tocarSucesso(); montarTelaPedido();
+            } catch (e) { tocarErro(); alert("Falha ao comunicar com servidor."); resetarTela(); }
+        }
+
+        function montarTelaPedido() {
+            alterarStatus("Em conferência", 'alerta'); 
+            document.getElementById('box-pedido').classList.add('opacity-50', 'pointer-events-none');
+            const boxProdutos = document.getElementById('box-produtos');
+            boxProdutos.classList.remove('hidden'); setTimeout(() => boxProdutos.classList.remove('opacity-0'), 50);
+            document.getElementById('info-pedido').innerHTML = `Pedido <strong>#${pedidoAtual.numero}</strong>`;
+            const badgeOrigem = document.getElementById('badge-origem');
+            badgeOrigem.classList.remove('hidden', 'bg-blue-100', 'text-blue-700', 'bg-orange-100', 'text-orange-700');
+            if (pedidoAtual.origem === 'BLING') { badgeOrigem.innerText = "Site (Bling)"; badgeOrigem.classList.add('bg-blue-100', 'text-blue-700'); } 
+            else { badgeOrigem.innerText = "Ficheiro / UpSeller"; badgeOrigem.classList.add('bg-orange-100', 'text-orange-700'); }
+            atualizarListaInterface(); document.getElementById('input-produto').focus();
+        }
+
+        function conferirPeça(skuLido) {
+            const skuTratado = String(skuLido).toLowerCase().trim();
+            let itemEncontrado = pedidoAtual.itens.find(i => String(i.sku).toLowerCase() === skuTratado);
+
+            // Auto-complete inteligente
+            if (!itemEncontrado) {
+                const parciais = pedidoAtual.itens.filter(i => (String(i.sku).toLowerCase().includes(skuTratado) || String(i.nome).toLowerCase().includes(skuTratado)) && i.conferido < i.esperado);
+                
+                if (parciais.length === 1) {
+                    itemEncontrado = parciais[0];
+                } else if (parciais.length > 1) {
+                    tocarErro();
+                    document.getElementById('input-produto').value = skuLido;
+                    filtrarItensPedido(); // Mantém a lista aberta para ele clicar na certa
+                    alert(`⚠️ MÚLTIPLAS VARIAÇÕES!\nExistem ${parciais.length} peças pendentes compatíveis com "${skuLido}". Por favor, clique na variação correta na lista abaixo.`);
+                    return;
+                }
+            }
+
+            if (itemEncontrado) {
+                if (itemEncontrado.conferido < itemEncontrado.esperado) { 
+                    itemEncontrado.conferido++; 
+                    tocarSucesso(); 
+                    document.getElementById('input-produto').value = '';
+                    document.getElementById('resultado-busca-produto').classList.add('hidden');
+                    atualizarListaInterface(); 
+                } else { 
+                    tocarErro(); alert(`❌ ERRO: O pedido exige apenas ${itemEncontrado.esperado} unidade(s) de ${itemEncontrado.sku}.`); 
+                }
+            } else { 
+                tocarErro(); alert(`❌ PRODUTO INCORRETO!\nO SKU "${skuLido}" NÃO pertence a este pedido ou já foi conferido!`); 
+            }
+        }
+
+        // 👇 A LISTA DA DIREITA AGORA FICA ESTÁTICA PARA MOSTRAR TODO O PEDIDO 👇
+        function atualizarListaInterface() {
+            const lista = document.getElementById('lista-itens'); 
+            lista.innerHTML = '';
+            let totalEsperado = 0, totalConferido = 0;
+            
+            pedidoAtual.itens.forEach(item => {
+                totalEsperado += item.esperado; 
+                totalConferido += item.conferido;
+                
+                const concluido = item.conferido === item.esperado;
+                const bgClass = concluido ? 'bg-emerald-50 border-emerald-200' : 'bg-white border-slate-200 hover:border-indigo-400 hover:shadow-md cursor-pointer';
+                const iconeClass = concluido ? 'text-emerald-500' : 'text-slate-300 group-hover:text-indigo-400';
+                const iconName = concluido ? 'check-circle-2' : 'circle';
+                
+                const li = document.createElement('li');
+                li.className = `group border p-5 rounded-2xl flex items-center justify-between shadow-sm transition-all duration-300 ${bgClass}`;
+                
+                if (!concluido) {
+                    li.setAttribute('onclick', `selecionarItemManual('${item.sku}')`);
+                    li.title = "Clique aqui para conferir este item";
+                }
+                
+                li.innerHTML = `<div class="flex items-center gap-4 flex-1 overflow-hidden"><i data-lucide="${iconName}" class="w-8 h-8 ${iconeClass} transition-colors"></i><div class="flex-1 min-w-0"><p class="font-black text-lg truncate">${item.nome}</p><p class="text-sm font-mono text-slate-500 mt-0.5">SKU: ${item.sku}</p></div></div><div class="text-center ml-4 pl-4 border-l"><p class="text-xs font-bold text-slate-400">QTD</p><p class="text-3xl font-black ${concluido ? 'text-emerald-600' : 'text-slate-700'}">${item.conferido} <span class="text-lg text-slate-400">/ ${item.esperado}</span></p></div>`;
+                lista.appendChild(li);
+            });
+
+            lucide.createIcons();
+            document.getElementById('texto-progresso').innerText = `${totalConferido} / ${totalEsperado}`;
+            document.getElementById('barra-progresso').style.width = `${totalEsperado === 0 ? 0 : Math.round((totalConferido / totalEsperado) * 100)}%`;
+            
+            const btnFinalizar = document.getElementById('btn-finalizar');
+            if (totalConferido === totalEsperado && totalEsperado > 0) { 
+                btnFinalizar.disabled = false; btnFinalizar.classList.add('animate-[pulse_2s_ease-in-out_infinite]'); alterarStatus("Pacote 100% Conferido!", 'sucesso'); 
+            } else { 
+                btnFinalizar.disabled = true; btnFinalizar.classList.remove('animate-[pulse_2s_ease-in-out_infinite]'); 
+            }
+        }
+
+        async function finalizarPacote() {
+            const btn = document.getElementById('btn-finalizar'); btn.innerHTML = `<i data-lucide="loader-2" class="w-6 h-6 animate-spin"></i> SINCRONIZANDO...`; btn.disabled = true; lucide.createIcons();
+            try {
+                const response = await fetch('/api/checkout/finalizar', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(pedidoAtual) });
+                const result = await response.json();
+                if (result.sucesso) { tocarSucesso(); alert(`📦 PACOTE LIBERADO!`); resetarTela(); } 
+                else { tocarErro(); alert("Erro no Bling."); btn.innerHTML = "TENTAR NOVAMENTE"; btn.disabled = false; }
+            } catch (e) { tocarErro(); alert("Falha de conexão."); btn.innerHTML = "TENTAR NOVAMENTE"; btn.disabled = false; }
+        }
+
+        function resetarTela() {
+            pedidoAtual = null; document.getElementById('input-pedido').disabled = false; document.getElementById('input-pedido').value = '';
+            document.getElementById('box-pedido').classList.remove('opacity-50', 'pointer-events-none');
+            document.getElementById('box-produtos').classList.add('opacity-0'); setTimeout(() => document.getElementById('box-produtos').classList.add('hidden'), 300);
+            
+            const listaBusca = document.getElementById('resultado-busca-produto');
+            if (listaBusca) { listaBusca.classList.add('hidden'); listaBusca.innerHTML = ''; }
+
+            document.getElementById('info-pedido').innerText = "Nenhum pedido carregado"; document.getElementById('badge-origem').classList.add('hidden');
+            document.getElementById('lista-itens').innerHTML = `<div class="h-full flex flex-col items-center justify-center mt-20"><div class="w-24 h-24 bg-white rounded-full flex items-center justify-center mb-4 shadow-sm border border-slate-100"><i data-lucide="scan-face" class="w-10 h-10 text-slate-300"></i></div><p class="text-slate-400 font-medium">Bipe ou digite o número do pedido e aperte Enter.</p></div>`;
+            document.getElementById('barra-progresso').style.width = '0%'; document.getElementById('texto-progresso').innerText = '0 / 0';
+            const btnFinalizar = document.getElementById('btn-finalizar'); btnFinalizar.disabled = true; btnFinalizar.classList.remove('animate-[pulse_2s_ease-in-out_infinite]'); btnFinalizar.innerHTML = `<i data-lucide="package-check" class="w-6 h-6"></i> FINALIZAR PACOTE`;
+            alterarStatus("Sistema Pronto", 'sucesso'); lucide.createIcons(); document.getElementById('input-pedido').focus();
+        }
+
+        function alterarStatus(mensagem, tipo) {
+            const badge = document.getElementById('status-badge'); document.getElementById('status-texto').innerText = mensagem;
+            badge.className = "flex items-center gap-2 px-4 py-2 rounded-full font-bold text-sm transition-all ";
+            if(tipo === 'buscando') badge.className += "bg-blue-50 border border-blue-200 text-blue-700";
+            if(tipo === 'sucesso') badge.className += "bg-emerald-50 border border-emerald-200 text-emerald-700";
+            if(tipo === 'erro') badge.className += "bg-rose-50 border border-rose-200 text-rose-700";
+            if(tipo === 'alerta') badge.className += "bg-amber-50 border border-amber-200 text-amber-700";
+        }
+        function tocarSucesso() { document.getElementById('beep-success').play().catch(()=>{}); document.body.classList.add('flash-success'); setTimeout(() => document.body.classList.remove('flash-success'), 150); }
+        function tocarErro() { document.getElementById('beep-error').play().catch(()=>{}); document.body.classList.add('flash-error'); setTimeout(() => document.body.classList.remove('flash-error'), 400); }
+    </script>
+</body>
+</html>

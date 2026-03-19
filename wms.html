@@ -1,0 +1,543 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WMS | Operação de Estoque</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700;900&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; transition: background-color 0.2s ease-out; background-color: #F8FAFC; }
+        .flash-success { background-color: #bbf7d0 !important; }
+        .flash-error { background-color: #fecaca !important; }
+        
+        .tema-entrada #header-icon-box { background-color: #4f46e5; box-shadow: 0 4px 14px 0 rgba(79, 70, 229, 0.39); }
+        .tema-saida #header-icon-box { background-color: #e11d48; box-shadow: 0 4px 14px 0 rgba(225, 29, 72, 0.39); }
+        
+        .tema-entrada #btn-finalizar { background-color: #10b981; }
+        .tema-saida #btn-finalizar { background-color: #e11d48; }
+
+        .tema-entrada .destaque-qtd { color: #4f46e5; }
+        .tema-saida .destaque-qtd { color: #e11d48; }
+        
+        input[type=number]::-webkit-inner-spin-button, input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+        #resultado-busca::-webkit-scrollbar { width: 6px; }
+        #resultado-busca::-webkit-scrollbar-thumb { background-color: #cbd5e1; border-radius: 4px; }
+        .lote-scroll::-webkit-scrollbar { width: 4px; }
+        .lote-scroll::-webkit-scrollbar-thumb { background-color: #e2e8f0; border-radius: 4px; }
+    </style>
+</head>
+<body id="body-main" class="h-screen flex flex-col overflow-hidden text-slate-800 tema-entrada">
+
+    <audio id="beep-success" src="https://actions.google.com/sounds/v1/ui/check_mark_complete.ogg" preload="auto"></audio>
+    <audio id="beep-error" src="https://actions.google.com/sounds/v1/alarms/beep_short.ogg" preload="auto"></audio>
+
+    <header class="bg-white border-b border-slate-200 px-8 py-4 flex justify-between items-center shadow-sm z-10 relative">
+        <div class="flex items-center gap-3 w-1/3">
+            <div id="header-icon-box" class="p-2.5 rounded-xl transition-colors duration-300">
+                <i id="header-icon" data-lucide="package-plus" class="text-white w-6 h-6"></i>
+            </div>
+            <div>
+                <h1 id="titulo-main" class="text-2xl font-black text-slate-900 tracking-tight leading-none transition-colors">Entrada de Estoque</h1>
+                <p id="subtitulo-main" class="text-sm font-medium text-slate-500 mt-1">Soma produtos no Bling</p>
+            </div>
+        </div>
+
+        <div class="flex justify-center w-1/3">
+            <div class="bg-slate-100 p-1.5 rounded-xl flex gap-1 shadow-inner border border-slate-200">
+                <button id="btn-modo-entrada" onclick="mudarModo('E')" class="px-6 py-2 rounded-lg font-bold text-sm bg-white shadow-sm text-indigo-700 transition-all">
+                    🟢 ENTRADA (+)
+                </button>
+                <button id="btn-modo-saida" onclick="mudarModo('S')" class="px-6 py-2 rounded-lg font-bold text-sm text-slate-500 hover:text-slate-700 hover:bg-slate-200/50 transition-all">
+                    🔴 SAÍDA (-)
+                </button>
+            </div>
+        </div>
+
+        <div class="flex justify-end w-1/3">
+            <div id="status-badge" class="flex items-center gap-2 bg-emerald-50 border border-emerald-200 text-emerald-700 px-4 py-2 rounded-full font-bold text-sm transition-all">
+                <span class="relative flex h-3 w-3">
+                  <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                  <span class="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span>
+                </span>
+                <span id="status-texto">Pronto para bipar!</span>
+            </div>
+        </div>
+    </header>
+
+    <main class="flex-1 flex overflow-hidden">
+        
+        <section class="flex-1 p-8 flex flex-col items-center justify-start relative overflow-y-auto">
+            
+            <div class="w-full max-w-2xl mt-4 mb-8 relative z-20">
+                <div class="relative">
+                    <i data-lucide="search" class="absolute left-4 top-4 text-slate-400 w-6 h-6"></i>
+                    <input type="text" id="busca-manual" oninput="filtrarCatalogo()" placeholder="Bipe ou digite o SKU/Nome..." class="w-full pl-12 pr-4 py-4 bg-white border-2 border-slate-200 rounded-2xl text-lg font-medium text-slate-700 outline-none transition-all shadow-sm focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100">
+                </div>
+                <ul id="resultado-busca" class="absolute w-full bg-white border border-slate-200 rounded-xl shadow-2xl mt-2 max-h-64 overflow-y-auto hidden z-30"></ul>
+            </div>
+
+            <div id="estado-vazio" class="text-center transition-all duration-300 mt-10">
+                <div class="w-32 h-32 bg-slate-100 rounded-full flex items-center justify-center mx-auto mb-6 shadow-inner border-4 border-white">
+                    <i data-lucide="scan-barcode" class="w-16 h-16 text-slate-400"></i>
+                </div>
+                <h2 class="text-3xl font-black text-slate-300">Modo Supermercado Ativo</h2>
+                <p class="text-slate-400 font-medium mt-2">Bipe as peças continuamente. O sistema fará a soma sozinho.</p>
+            </div>
+
+            <div id="produto-card" class="hidden w-full max-w-3xl bg-white rounded-3xl shadow-2xl border border-slate-100 overflow-hidden flex flex-col md:flex-row transform transition-all scale-95 opacity-0">
+                <div class="md:w-5/12 bg-slate-50 p-8 flex flex-col items-center justify-center border-r border-slate-100">
+                    <div class="w-48 h-48 bg-white rounded-2xl shadow-sm border border-slate-200 mb-6 p-2 flex items-center justify-center overflow-hidden">
+                        <img id="produto-foto" src="" alt="Produto" class="w-full h-full object-contain hidden">
+                        <i id="icone-sem-foto" data-lucide="image-off" class="w-12 h-12 text-slate-300"></i>
+                    </div>
+                    <span id="produto-sku" class="bg-slate-200 text-slate-700 font-mono font-black px-4 py-1.5 rounded-lg text-lg tracking-wider mb-3">--</span>
+                </div>
+
+                <div class="md:w-7/12 p-8 flex flex-col justify-center text-center">
+                    <h2 id="produto-nome" class="text-2xl font-black text-slate-800 leading-tight mb-8">--</h2>
+                    
+                    <div class="bg-slate-50 border border-slate-200 rounded-2xl p-6 relative overflow-hidden">
+                        <div class="absolute top-0 left-0 w-full h-1 bg-indigo-500 opacity-20"></div>
+                        <p class="text-sm font-bold text-slate-400 uppercase tracking-widest mb-1">Quantidade neste lote</p>
+                        <div class="flex items-center justify-center gap-4">
+                            <i data-lucide="scan" class="w-8 h-8 text-slate-300"></i>
+                            <span id="produto-qtd-lote" class="text-7xl font-black destaque-qtd transition-all duration-100 leading-none">1</span>
+                        </div>
+                    </div>
+                    <p class="text-slate-400 text-xs font-bold mt-4 animate-pulse">Pode bipar o próximo...</p>
+                </div>
+            </div>
+        </section>
+
+        <aside class="w-96 bg-white border-l border-slate-200 flex flex-col shadow-[-4px_0_24px_rgba(0,0,0,0.02)] z-10">
+            <div class="p-5 border-b border-slate-100 bg-slate-50 flex justify-between items-center">
+                <h3 class="font-black text-slate-800 flex items-center gap-2">
+                    <i data-lucide="shopping-cart" class="w-5 h-5 text-slate-600"></i> Lista Atual
+                </h3>
+                <span id="contador-lote" class="bg-slate-200 text-slate-600 text-xs font-bold px-2 py-1 rounded-md">0 itens</span>
+            </div>
+            
+            <div class="flex-1 overflow-y-auto p-4 lote-scroll bg-slate-50/30">
+                <ul id="lista-lote" class="space-y-3">
+                    <li class="text-center text-sm font-medium text-slate-400 mt-10" id="lote-vazio">
+                        Lista vazia.<br><span class="text-xs">Bipe os produtos para começar.</span>
+                    </li>
+                </ul>
+            </div>
+
+            <div class="p-4 border-t border-slate-100 bg-white shadow-[0_-4px_10px_rgba(0,0,0,0.02)]">
+                <button id="btn-finalizar" onclick="salvarLoteNoBling()" disabled class="w-full text-white font-black text-lg py-4 rounded-xl flex items-center justify-center gap-2 transition-all shadow-lg disabled:opacity-50 disabled:cursor-not-allowed disabled:shadow-none">
+                    <i data-lucide="server" class="w-6 h-6"></i> <span id="texto-btn-finalizar">SALVAR NO BLING</span>
+                </button>
+            </div>
+        </aside>
+
+        <div id="overlay-salvando" class="fixed inset-0 bg-slate-900/80 backdrop-blur-sm z-50 hidden flex-col items-center justify-center">
+            <div class="bg-white p-8 rounded-2xl flex flex-col items-center text-center max-w-sm w-full">
+                <i data-lucide="loader-2" class="w-12 h-12 text-slate-600 animate-spin mb-4"></i>
+                <h3 class="text-xl font-black text-slate-800">Sincronizando com Bling...</h3>
+                <p id="progresso-texto" class="text-slate-500 font-medium mt-2">Enviando item 1 de X</p>
+                <div class="w-full bg-slate-100 rounded-full h-3 mt-4 overflow-hidden">
+                    <div id="progresso-barra" class="bg-slate-800 h-3 rounded-full transition-all duration-300" style="width: 0%"></div>
+                </div>
+            </div>
+        </div>
+
+    </main>
+
+    <script>
+        lucide.createIcons();
+        
+        let barcodeBuffer = "";
+        let lastKeyTime = Date.now();
+        let catalogoBling = []; 
+        let catalogoCarregado = false;
+        let loteDeEntrada = []; // O carrinho
+        let operacaoAtual = 'E'; // 'E' (Entrada) ou 'S' (Saída)
+
+        // 🟢 CARREGAR CATÁLOGO (Silencioso e à prova de falhas)
+        function carregarCatalogo() {
+            fetch('/api/produtos')
+                .then(res => res.json())
+                .then(data => { 
+                    catalogoBling = data; 
+                    catalogoCarregado = true;
+                    // Se o operador já tinha digitado algo enquanto carregava, atualiza a lista na hora!
+                    if (document.getElementById('busca-manual').value.length >= 2) {
+                        filtrarCatalogo();
+                    }
+                })
+                .catch(err => {
+                    console.error("Erro ao puxar catálogo, tentando de novo...", err);
+                    setTimeout(carregarCatalogo, 3000); // Tenta novamente em 3 segundos
+                });
+        }
+        carregarCatalogo();
+
+        // 🔄 MUDAR MODO (ENTRADA / SAÍDA)
+        function mudarModo(modo) {
+            if (loteDeEntrada.length > 0) {
+                if(!confirm("Atenção! Mudar o modo vai APAGAR a lista atual. Deseja continuar?")) return;
+                loteDeEntrada = [];
+                atualizarInterfaceLote();
+                document.getElementById('produto-card').classList.add('hidden');
+                document.getElementById('estado-vazio').classList.remove('hidden');
+            }
+
+            operacaoAtual = modo;
+            const body = document.getElementById('body-main');
+            const btnEntrada = document.getElementById('btn-modo-entrada');
+            const btnSaida = document.getElementById('btn-modo-saida');
+            const icone = document.getElementById('header-icon');
+
+            if (modo === 'E') {
+                body.className = "h-screen flex flex-col overflow-hidden text-slate-800 tema-entrada";
+                btnEntrada.className = "px-6 py-2 rounded-lg font-bold text-sm bg-white shadow-sm text-indigo-700 transition-all";
+                btnSaida.className = "px-6 py-2 rounded-lg font-bold text-sm text-slate-500 hover:text-slate-700 hover:bg-slate-200/50 transition-all";
+                
+                document.getElementById('titulo-main').innerText = "Entrada de Estoque";
+                document.getElementById('subtitulo-main').innerText = "Soma produtos no Bling";
+                document.getElementById('texto-btn-finalizar').innerText = "SALVAR ENTRADA";
+                icone.setAttribute('data-lucide', 'package-plus');
+            } else {
+                body.className = "h-screen flex flex-col overflow-hidden text-slate-800 tema-saida";
+                btnSaida.className = "px-6 py-2 rounded-lg font-bold text-sm bg-white shadow-sm text-rose-700 transition-all";
+                btnEntrada.className = "px-6 py-2 rounded-lg font-bold text-sm text-slate-500 hover:text-slate-700 hover:bg-slate-200/50 transition-all";
+                
+                document.getElementById('titulo-main').innerText = "Saída de Estoque";
+                document.getElementById('subtitulo-main').innerText = "Subtrai produtos do Bling";
+                document.getElementById('texto-btn-finalizar').innerText = "SALVAR SAÍDA";
+                icone.setAttribute('data-lucide', 'package-minus');
+            }
+            lucide.createIcons();
+        }
+
+        // 🟢 O LEITOR DE CÓDIGO DE BARRAS (ESCUTA GLOBAL)
+        document.addEventListener('keydown', function(e) {
+            if (document.activeElement.id === 'busca-manual') return;
+
+            const currentTime = Date.now();
+            if (currentTime - lastKeyTime > 50) { barcodeBuffer = ""; }
+            lastKeyTime = currentTime;
+
+            if (e.key === 'Enter') {
+                if (barcodeBuffer.length >= 2) {
+                    e.preventDefault();
+                    processarBipe(barcodeBuffer);
+                    barcodeBuffer = "";
+                }
+            } else if (e.key.length === 1) { 
+                barcodeBuffer += e.key;
+            }
+        });
+
+        // 🚀 O MOTOR PRINCIPAL DE BIPAGEM CONTÍNUA COM INTELIGÊNCIA
+        function processarBipe(codigo) {
+            const termoSeguro = String(codigo).toLowerCase().trim();
+
+            const itemExistente = loteDeEntrada.find(i => String(i.codigo).toLowerCase() === termoSeguro);
+            
+            if (itemExistente) {
+                itemExistente.quantidade++;
+                tocarSucesso();
+                mostrarProdutoNoCard(itemExistente);
+                atualizarInterfaceLote();
+                return;
+            }
+
+            const matchExato = catalogoBling.find(p => String(p.codigo).toLowerCase() === termoSeguro);
+            
+            if (matchExato) {
+                buscarNaAPI(matchExato.codigo);
+            } else {
+                const parciais = catalogoBling.filter(p => String(p.codigo).toLowerCase().includes(termoSeguro) || String(p.descricao).toLowerCase().includes(termoSeguro));
+                
+                if (parciais.length === 1) {
+                    buscarNaAPI(parciais[0].codigo);
+                } else if (parciais.length > 1) {
+                    tocarErro();
+                    const barraBusca = document.getElementById('busca-manual');
+                    barraBusca.value = codigo;
+                    filtrarCatalogo(); 
+                    barraBusca.focus(); 
+                    alert(`⚠️ Múltiplas variações encontradas para "${codigo}".\nPor favor, escolha a peça correta clicando na lista.`);
+                } else {
+                    buscarNaAPI(codigo);
+                }
+            }
+        }
+
+        function buscarNaAPI(codigoExato) {
+            alterarStatus(`Buscando ${codigoExato}...`, 'buscando');
+            
+            fetch(`/api/wms/produto/${codigoExato}`)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.erro) {
+                        tocarErro();
+                        alterarStatus("Produto não encontrado", 'erro');
+                        return;
+                    }
+                    
+                    const novoItem = {
+                        id: data.id,
+                        codigo: data.codigo,
+                        nome: data.nome,
+                        fotoUrl: data.fotoUrl,
+                        quantidade: 1
+                    };
+                    
+                    loteDeEntrada.push(novoItem);
+                    tocarSucesso();
+                    mostrarProdutoNoCard(novoItem);
+                    atualizarInterfaceLote();
+                    alterarStatus("Pronto para bipar!", 'sucesso');
+                })
+                .catch(err => {
+                    tocarErro();
+                    alterarStatus("Falha de conexão", 'erro');
+                });
+        }
+
+        function mostrarProdutoNoCard(produto) {
+            document.getElementById('estado-vazio').classList.add('hidden');
+            const card = document.getElementById('produto-card');
+            card.classList.remove('hidden');
+            
+            card.classList.remove('scale-100');
+            card.classList.add('scale-95');
+            setTimeout(() => { card.classList.remove('scale-95'); card.classList.add('scale-100'); }, 50);
+            
+            const txtQtd = document.getElementById('produto-qtd-lote');
+            txtQtd.classList.add('scale-150');
+            setTimeout(() => txtQtd.classList.remove('scale-150'), 150);
+
+            document.getElementById('produto-nome').innerText = produto.nome;
+            document.getElementById('produto-sku').innerText = produto.codigo;
+            txtQtd.innerText = produto.quantidade;
+            
+            const foto = document.getElementById('produto-foto');
+            const icone = document.getElementById('icone-sem-foto');
+            if (produto.fotoUrl) {
+                foto.src = produto.fotoUrl;
+                foto.classList.remove('hidden');
+                icone.classList.add('hidden');
+            } else {
+                foto.classList.add('hidden');
+                icone.classList.remove('hidden');
+            }
+        }
+
+        function alterarQtd(id, delta) {
+            const item = loteDeEntrada.find(i => i.id === id);
+            if(item) {
+                item.quantidade += delta;
+                if(item.quantidade <= 0) {
+                    loteDeEntrada = loteDeEntrada.filter(i => i.id !== id);
+                    document.getElementById('produto-card').classList.add('hidden');
+                    document.getElementById('estado-vazio').classList.remove('hidden');
+                } else {
+                    if(document.getElementById('produto-sku').innerText === item.codigo) {
+                        document.getElementById('produto-qtd-lote').innerText = item.quantidade;
+                    }
+                }
+                atualizarInterfaceLote();
+            }
+        }
+
+        function removerDoLote(idProduto) {
+            loteDeEntrada = loteDeEntrada.filter(item => item.id !== idProduto);
+            document.getElementById('produto-card').classList.add('hidden');
+            document.getElementById('estado-vazio').classList.remove('hidden');
+            atualizarInterfaceLote();
+        }
+
+        function atualizarInterfaceLote() {
+            const lista = document.getElementById('lista-lote');
+            const btnFinalizar = document.getElementById('btn-finalizar');
+            const contador = document.getElementById('contador-lote');
+
+            lista.innerHTML = ''; 
+
+            if (loteDeEntrada.length === 0) {
+                lista.innerHTML = `<li class="text-center text-sm font-medium text-slate-400 mt-10" id="lote-vazio">Lista vazia.<br><span class="text-xs">Bipe os produtos para começar.</span></li>`;
+                btnFinalizar.disabled = true;
+                contador.innerText = "0 itens";
+                return;
+            }
+
+            btnFinalizar.disabled = false;
+            let totalPecas = 0;
+
+            [...loteDeEntrada].reverse().forEach(item => {
+                totalPecas += item.quantidade;
+                const corBadge = operacaoAtual === 'E' ? 'bg-indigo-100 text-indigo-800' : 'bg-rose-100 text-rose-800';
+
+                const li = document.createElement('li');
+                li.className = "bg-white border border-slate-200 p-3 rounded-xl shadow-sm flex flex-col gap-2";
+                li.innerHTML = `
+                    <div class="flex justify-between items-start">
+                        <div class="flex-1 pr-2 overflow-hidden">
+                            <p class="text-xs font-bold text-slate-800 leading-tight truncate" title="${item.nome}">${item.nome}</p>
+                            <p class="text-[10px] font-bold text-slate-400 mt-0.5">${item.codigo || 'S/COD'}</p>
+                        </div>
+                        <button onclick="removerDoLote(${item.id})" class="p-1 text-slate-300 hover:text-rose-500 transition-colors">
+                            <i data-lucide="trash-2" class="w-4 h-4"></i>
+                        </button>
+                    </div>
+                    
+                    <div class="flex items-center justify-between mt-1 bg-slate-50 p-1.5 rounded-lg border border-slate-100">
+                        <span class="text-[10px] font-bold text-slate-400 uppercase">Qtd:</span>
+                        <div class="flex items-center gap-3">
+                            <button onclick="alterarQtd(${item.id}, -1)" class="w-6 h-6 flex items-center justify-center bg-white border border-slate-200 rounded hover:bg-slate-100 transition">
+                                <i data-lucide="minus" class="w-3 h-3 text-slate-600"></i>
+                            </button>
+                            <span class="${corBadge} font-black px-2 py-0.5 rounded text-sm min-w-[2rem] text-center">
+                                ${item.quantidade}
+                            </span>
+                            <button onclick="alterarQtd(${item.id}, 1)" class="w-6 h-6 flex items-center justify-center bg-white border border-slate-200 rounded hover:bg-slate-100 transition">
+                                <i data-lucide="plus" class="w-3 h-3 text-slate-600"></i>
+                            </button>
+                        </div>
+                    </div>
+                `;
+                lista.appendChild(li);
+            });
+
+            contador.innerText = `${loteDeEntrada.length} SKUs (${totalPecas} un)`;
+            lucide.createIcons();
+        }
+
+        async function salvarLoteNoBling() {
+            if (loteDeEntrada.length === 0) return;
+
+            const acaoNome = operacaoAtual === 'E' ? 'ADICIONAR' : 'SUBTRAIR/REMOVER';
+            if (!confirm(`Você vai ${acaoNome} ${loteDeEntrada.length} produtos diferentes no Bling. Continuar?`)) return;
+
+            const overlay = document.getElementById('overlay-salvando');
+            const progressoTexto = document.getElementById('progresso-texto');
+            const progressoBarra = document.getElementById('progresso-barra');
+            overlay.classList.remove('hidden');
+            overlay.classList.add('flex');
+
+            let errosEncontrados = 0;
+
+            for (let i = 0; i < loteDeEntrada.length; i++) {
+                const item = loteDeEntrada[i];
+                progressoTexto.innerText = `Enviando ${i + 1} de ${loteDeEntrada.length}... (${item.codigo})`;
+                progressoBarra.style.width = `${Math.round(((i) / loteDeEntrada.length) * 100)}%`;
+
+                try {
+                    const response = await fetch('/api/wms/entrada', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ idProduto: item.id, quantidade: item.quantidade, operacao: operacaoAtual })
+                    });
+                    const result = await response.json();
+                    if (result.erro) errosEncontrados++;
+                } catch (e) {
+                    errosEncontrados++;
+                }
+                await new Promise(r => setTimeout(r, 400)); 
+            }
+
+            progressoBarra.style.width = `100%`;
+            await new Promise(r => setTimeout(r, 500)); 
+
+            overlay.classList.add('hidden');
+            overlay.classList.remove('flex');
+
+            if (errosEncontrados === 0) {
+                alert("🎉 Lote salvo com sucesso no Bling!");
+                loteDeEntrada = []; 
+                atualizarInterfaceLote();
+                document.getElementById('produto-card').classList.add('hidden');
+                document.getElementById('estado-vazio').classList.remove('hidden');
+                alterarStatus("Lote finalizado! Pronto para o próximo...", 'sucesso');
+            } else {
+                alert(`⚠️ O lote foi processado, mas ${errosEncontrados} itens falharam.`);
+                loteDeEntrada = [];
+                atualizarInterfaceLote();
+                alterarStatus("Finalizado com alertas.", 'erro');
+            }
+        }
+
+        // 🔍 PESQUISA MANUAL COM AVISO DE CARREGAMENTO
+        function filtrarCatalogo() {
+            const termo = document.getElementById('busca-manual').value.toLowerCase().trim();
+            const lista = document.getElementById('resultado-busca');
+            lista.innerHTML = '';
+            
+            if (termo.length < 2) { lista.classList.add('hidden'); return; }
+
+            // Se o usuário digitar rápido demais antes do Bling terminar de baixar:
+            if (!catalogoCarregado && catalogoBling.length === 0) {
+                lista.innerHTML = `<li class="p-4 text-indigo-500 text-center font-bold animate-pulse"><i data-lucide="loader-2" class="w-5 h-5 inline animate-spin mr-2"></i> Baixando catálogo do Bling, aguarde...</li>`;
+                lista.classList.remove('hidden');
+                lucide.createIcons();
+                return;
+            }
+
+            const filtrados = catalogoBling.filter(p => String(p.codigo).toLowerCase().includes(termo) || String(p.descricao).toLowerCase().includes(termo)).slice(0, 50);
+
+            if (filtrados.length === 0) {
+                lista.innerHTML = `<li class="p-4 text-slate-500 text-center font-medium">Nenhum produto encontrado.</li>`;
+            } else {
+                filtrados.forEach(p => {
+                    lista.innerHTML += `
+                        <li onclick="selecionarBuscaManual('${p.codigo}')" class="p-4 hover:bg-slate-50 border-b border-slate-100 cursor-pointer flex justify-between items-center group">
+                            <div>
+                                <p class="font-bold text-slate-800 leading-tight">${p.descricao}</p>
+                                <p class="text-xs font-mono text-slate-500 mt-1">SKU: ${p.codigo || 'S/COD'}</p>
+                            </div>
+                            <span class="bg-indigo-50 text-indigo-600 px-3 py-1.5 rounded-lg text-xs font-bold transition opacity-0 group-hover:opacity-100">+ Bipar</span>
+                        </li>
+                    `;
+                });
+            }
+            lista.classList.remove('hidden');
+        }
+
+        function selecionarBuscaManual(codigo) {
+            document.getElementById('busca-manual').value = '';
+            document.getElementById('resultado-busca').classList.add('hidden');
+            processarBipe(codigo);
+            document.getElementById('busca-manual').blur(); 
+        }
+
+        document.addEventListener('click', (e) => {
+            if(!e.target.closest('#busca-manual') && !e.target.closest('#resultado-busca')) {
+                document.getElementById('resultado-busca').classList.add('hidden');
+            }
+        });
+
+        function tocarSucesso() {
+            document.getElementById('beep-success').play().catch(()=>console.log('Audio Blocked'));
+            document.body.classList.add('flash-success');
+            setTimeout(() => document.body.classList.remove('flash-success'), 150);
+        }
+
+        function tocarErro() {
+            document.getElementById('beep-error').play().catch(()=>console.log('Audio Blocked'));
+            document.body.classList.add('flash-error');
+            setTimeout(() => document.body.classList.remove('flash-error'), 400);
+            const card = document.getElementById('produto-card');
+            if(!card.classList.contains('hidden')) {
+                card.classList.add('animate-[bounce_0.5s_ease-in-out]');
+                setTimeout(() => card.classList.remove('animate-[bounce_0.5s_ease-in-out]'), 500);
+            }
+        }
+
+        function alterarStatus(mensagem, tipo) {
+            const badge = document.getElementById('status-badge');
+            document.getElementById('status-texto').innerText = mensagem;
+            badge.className = "flex items-center gap-2 px-4 py-2 rounded-full font-bold text-sm transition-all ";
+            if(tipo === 'buscando') badge.className += "bg-blue-50 border border-blue-200 text-blue-700";
+            if(tipo === 'sucesso')  badge.className += "bg-emerald-50 border border-emerald-200 text-emerald-700";
+            if(tipo === 'erro')     badge.className += "bg-rose-50 border border-rose-200 text-rose-700";
+        }
+    </script>
+</body>
+</html>
