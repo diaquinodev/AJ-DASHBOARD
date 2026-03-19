@@ -455,54 +455,108 @@ app.get('/api/debug-skus', async (req, res) => {
 
         const produtos = await buscarEstoque(token);
 
-        let html = `<!DOCTYPE html><html><head><meta charset="UTF-8">
-        <title>Debug SKUs - Bling → UpSeller</title>
-        <style>
-            body { font-family: monospace; background: #1a1a2e; color: #eee; padding: 20px; }
-            h1 { color: #00d4ff; }
-            table { border-collapse: collapse; width: 100%; margin: 15px 0; }
-            th { background: #e94560; color: #fff; padding: 10px; text-align: left; }
-            td { padding: 8px 10px; border-bottom: 1px solid #0f3460; }
-            tr:hover { background: #16213e; }
-            .sku-gerado { color: #00ff88; font-weight: bold; font-size: 1.1em; }
-            .pai { color: #888; font-style: italic; }
-            .aviso { background: #e94560; color: #fff; padding: 15px; border-radius: 8px; margin: 15px 0; }
-            .ok { background: #0f3460; }
-        </style></head><body>
-        <h1>🔍 Mapeamento: Nome do Bling → SKU da UpSeller</h1>
-        <div class="aviso">
-            Compare a coluna <strong>"SKU Gerado para UpSeller"</strong> com o que aparece no Armazém da UpSeller.<br>
-            Se bater, a exportação vai funcionar. Se não bater, me mande um print!
-        </div>
-        <table>
-        <tr><th>#</th><th>Nome no Bling</th><th>SKU Gerado para UpSeller</th><th>Estoque</th></tr>`;
-
-        let contVariacoes = 0;
-        let contPais = 0;
-
-        produtos.forEach((p, i) => {
+        // Classifica e ordena: variações primeiro, depois pais
+        const classificados = produtos.map(p => {
             const skuGerado = blingParaSkuUpSeller(p.descricao);
-            if (skuGerado) {
-                contVariacoes++;
-                html += `<tr class="ok">
-                    <td>${i+1}</td>
-                    <td>${p.descricao}</td>
-                    <td class="sku-gerado">${skuGerado}</td>
+            return { ...p, skuGerado, ehVariacao: !!skuGerado };
+        });
+        classificados.sort((a, b) => {
+            if (a.ehVariacao && !b.ehVariacao) return -1;
+            if (!a.ehVariacao && b.ehVariacao) return 1;
+            return (a.descricao || '').localeCompare(b.descricao || '');
+        });
+
+        let contVariacoes = classificados.filter(p => p.ehVariacao).length;
+        let contPais = classificados.filter(p => !p.ehVariacao).length;
+
+        let html = `<!DOCTYPE html><html><head><meta charset="UTF-8">
+        <title>Raio-X de SKUs (Bling)</title>
+        <style>
+            * { box-sizing: border-box; margin: 0; padding: 0; }
+            body { font-family: 'Segoe UI', Arial, sans-serif; background: #f5f5f5; color: #333; padding: 20px; }
+            h1 { color: #333; font-size: 1.4em; margin-bottom: 4px; }
+            .subtitle { color: #666; font-size: 0.9em; margin-bottom: 20px; }
+            .resumo { display: flex; gap: 15px; margin-bottom: 20px; flex-wrap: wrap; }
+            .card { padding: 15px 20px; border-radius: 8px; color: #fff; min-width: 180px; }
+            .card-total { background: #3b82f6; }
+            .card-ok { background: #22c55e; }
+            .card-pai { background: #ef4444; }
+            .card h2 { font-size: 2em; margin: 0; }
+            .card span { font-size: 0.85em; opacity: 0.9; }
+            table { border-collapse: collapse; width: 100%; background: #fff; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+            th { background: #1e293b; color: #fff; padding: 12px 15px; text-align: left; font-size: 0.85em; text-transform: uppercase; }
+            td { padding: 10px 15px; border-bottom: 1px solid #e5e7eb; font-size: 0.9em; }
+            tr:hover { background: #f0f9ff; }
+            tr.variacao { background: #f0fdf4; }
+            tr.pai { background: #fef2f2; }
+            .badge { display: inline-block; padding: 3px 10px; border-radius: 12px; font-size: 0.8em; font-weight: 600; }
+            .badge-ok { background: #dcfce7; color: #166534; }
+            .badge-pai { background: #fee2e2; color: #991b1b; }
+            .sku { font-family: monospace; font-weight: 700; color: #059669; font-size: 0.95em; }
+            .filtros { margin-bottom: 15px; display: flex; gap: 8px; align-items: center; }
+            .filtros button { padding: 6px 14px; border: 1px solid #d1d5db; border-radius: 6px; background: #fff; cursor: pointer; font-size: 0.85em; }
+            .filtros button.ativo { background: #1e293b; color: #fff; border-color: #1e293b; }
+            .filtros input { padding: 6px 12px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 0.85em; width: 250px; }
+        </style></head><body>
+        <h1>Raio-X de SKUs (Bling)</h1>
+        <p class="subtitle">Veja a diferenca entre o Produto Pai (sem COR no nome) e a Variacao/Filho (com COR e TAMANHO)</p>
+
+        <div class="resumo">
+            <div class="card card-total"><h2>${produtos.length}</h2><span>Total de Produtos</span></div>
+            <div class="card card-ok"><h2>${contVariacoes}</h2><span>Variacoes (com SKU)</span></div>
+            <div class="card card-pai"><h2>${contPais}</h2><span>Pais (ignorados)</span></div>
+        </div>
+
+        <div class="filtros">
+            <button class="ativo" onclick="filtrar('todos')">Todos</button>
+            <button onclick="filtrar('variacao')">Variacoes</button>
+            <button onclick="filtrar('pai')">Pais</button>
+            <input type="text" id="busca" placeholder="Buscar por nome ou SKU..." oninput="filtrar()">
+        </div>
+
+        <table>
+        <thead><tr><th>Nome no Bling</th><th>Codigo (Bling)</th><th>SKU UpSeller</th><th>Estoque</th><th>Tipo</th></tr></thead>
+        <tbody id="corpo">`;
+
+        classificados.forEach(p => {
+            if (p.ehVariacao) {
+                html += `<tr class="variacao" data-tipo="variacao">
+                    <td>${p.descricao || '-'}</td>
+                    <td>${p.codigo || '-'}</td>
+                    <td class="sku">${p.skuGerado}</td>
                     <td>${p.saldoFisicoTotal}</td>
+                    <td><span class="badge badge-ok">Variacao (OK)</span></td>
                 </tr>`;
             } else {
-                contPais++;
-                html += `<tr>
-                    <td>${i+1}</td>
-                    <td>${p.descricao}</td>
-                    <td class="pai">⛔ PRODUTO-PAI (ignorado)</td>
+                html += `<tr class="pai" data-tipo="pai">
+                    <td>${p.descricao || '-'}</td>
+                    <td>${p.codigo || '-'}</td>
+                    <td style="color:#999;">-</td>
                     <td>${p.saldoFisicoTotal}</td>
+                    <td><span class="badge badge-pai">Pai (Ignorado)</span></td>
                 </tr>`;
             }
         });
 
-        html += `</table>
-        <p>✅ <strong>${contVariacoes}</strong> SKUs gerados | ⛔ <strong>${contPais}</strong> produtos-pai ignorados</p>
+        html += `</tbody></table>
+
+        <script>
+        let filtroAtual = 'todos';
+        function filtrar(tipo) {
+            if (tipo) filtroAtual = tipo;
+            const busca = document.getElementById('busca').value.toLowerCase();
+            const linhas = document.querySelectorAll('#corpo tr');
+            document.querySelectorAll('.filtros button').forEach(b => b.classList.remove('ativo'));
+            document.querySelector('.filtros button[onclick*="' + filtroAtual + '"]').classList.add('ativo');
+            linhas.forEach(tr => {
+                const tipoLinha = tr.dataset.tipo;
+                const texto = tr.textContent.toLowerCase();
+                const matchTipo = filtroAtual === 'todos' || tipoLinha === filtroAtual;
+                const matchBusca = !busca || texto.includes(busca);
+                tr.style.display = (matchTipo && matchBusca) ? '' : 'none';
+            });
+        }
+        </script>
         </body></html>`;
 
         res.setHeader('Content-Type', 'text/html; charset=utf-8');
