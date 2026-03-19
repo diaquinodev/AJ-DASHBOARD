@@ -577,11 +577,37 @@ app.post('/api/wms/entrada', async (req, res) => {
   }
 });
 
-app.listen(3000, () => {
+// Descobre o IP local da máquina na rede
+const os = require("os");
+function obterIPLocal() {
+  const interfaces = os.networkInterfaces();
+  for (const nome of Object.keys(interfaces)) {
+    for (const iface of interfaces[nome]) {
+      if (iface.family === "IPv4" && !iface.internal) {
+        return iface.address;
+      }
+    }
+  }
+  return "localhost";
+}
+
+app.listen(3000, "0.0.0.0", () => {
+  const ip = obterIPLocal();
   console.log("======================================================");
-  console.log("🌐 DASHBOARD: http://localhost:3000/dashboard.html");
-  console.log("📦 WMS:       http://localhost:3000/wms.html");
-  console.log("🛒 CHECKOUT:  http://localhost:3000/checkout.html");
+  console.log("   🏢 SISTEMA AJ MODAS - SERVIDOR INICIADO!");
+  console.log("======================================================");
+  console.log("");
+  console.log("   📌 ACESSO LOCAL (neste PC):");
+  console.log("   🌐 Dashboard: http://localhost:3000/dashboard.html");
+  console.log("   📦 WMS:       http://localhost:3000/wms.html");
+  console.log("   🛒 Checkout:  http://localhost:3000/checkout.html");
+  console.log("");
+  console.log("   📌 ACESSO PELA REDE (outros PCs da empresa):");
+  console.log(`   🌐 Dashboard: http://${ip}:3000/dashboard.html`);
+  console.log(`   📦 WMS:       http://${ip}:3000/wms.html`);
+  console.log(`   🛒 Checkout:  http://${ip}:3000/checkout.html`);
+  console.log("");
+  console.log("   ⚠️  Passe esses links acima para seus colaboradores!");
   console.log("======================================================");
 });
 
