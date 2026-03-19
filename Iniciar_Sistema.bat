@@ -6,7 +6,7 @@ echo         INICIANDO SISTEMA AJ MODAS...
 echo ===================================================
 echo.
 echo ATENCAO: Nao feche esta tela preta!
-echo E ela que mantem o Robo do WhatsApp e o Checkout funcionando.
+echo E ela que mantem o Dashboard e o Checkout funcionando.
 echo Se quiser desligar o sistema, basta fechar esta janela.
 echo.
 

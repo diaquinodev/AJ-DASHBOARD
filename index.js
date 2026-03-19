@@ -6,8 +6,9 @@
  */
 
 const archiver              = require('archiver'); // 👈 Adicionado para gerar o ZIP
-const { Client, LocalAuth } = require("whatsapp-web.js");
-const qrcode                = require("qrcode-terminal");
+// WhatsApp desativado temporariamente
+// const { Client, LocalAuth } = require("whatsapp-web.js");
+// const qrcode                = require("qrcode-terminal");
 const cron                  = require("node-cron");
 const axios                 = require("axios");
 const fs                    = require("fs");
@@ -80,6 +81,31 @@ async function obterAccessToken() {
   return tokens.access_token;
 }
 
+// Faz chamada ao Bling com retry automático em caso de rate-limit (429) ou timeout
+async function blingRequest(url, accessToken, params = {}) {
+  const maxTentativas = 3;
+  for (let tentativa = 1; tentativa <= maxTentativas; tentativa++) {
+    try {
+      const resp = await axios.get(url, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+        params,
+        timeout: 30000
+      });
+      return resp;
+    } catch (err) {
+      const status = err.response?.status;
+      if (status === 429 || err.code === 'ECONNABORTED' || err.code === 'ETIMEDOUT') {
+        const espera = tentativa * 3000;
+        console.log(`   [Bling] Rate-limit/timeout (${status || err.code}). Aguardando ${espera/1000}s... (tentativa ${tentativa}/${maxTentativas})`);
+        await delay(espera);
+        if (tentativa === maxTentativas) throw err;
+      } else {
+        throw err;
+      }
+    }
+  }
+}
+
 async function buscarEstoque(accessToken) {
   const todosProdutos = [];
   let pagina = 1;
@@ -88,11 +114,7 @@ async function buscarEstoque(accessToken) {
   console.log("   [Bling] A iniciar varredura completa do catálogo...");
   do {
     try {
-      const resp = await axios.get("https://www.bling.com.br/Api/v3/produtos", {
-        headers: { Authorization: `Bearer ${accessToken}` },
-        params: { pagina, limite: 100, tipo: 'T' },
-        timeout: 30000
-      });
+      const resp = await blingRequest("https://www.bling.com.br/Api/v3/produtos", accessToken, { pagina, limite: 100, tipo: 'T' });
 
       const data = resp.data?.data ?? [];
       todosProdutos.push(...data);
@@ -104,7 +126,7 @@ async function buscarEstoque(accessToken) {
       console.error(`   [Bling] Erro na página ${pagina}: ${err.message}`);
       throw err;
     }
-    await delay(500);
+    await delay(800);
   } while (temMais);
 
   console.log(`   [Bling] Catálogo completo: ${todosProdutos.length} produtos. Buscando saldos...`);
@@ -119,18 +141,14 @@ async function buscarEstoque(accessToken) {
     try {
       const params = new URLSearchParams();
       for (const id of lote) params.append("idsProdutos[]", id);
-      const resp = await axios.get("https://www.bling.com.br/Api/v3/estoques/saldos", {
-        headers: { Authorization: `Bearer ${accessToken}` },
-        params: params,
-        timeout: 30000
-      });
+      const resp = await blingRequest("https://www.bling.com.br/Api/v3/estoques/saldos", accessToken, params);
       saldos.push(...(resp.data?.data ?? []));
       console.log(`   [Bling] Saldos: lote ${li+1}/${lotes.length} OK`);
     } catch (err) {
       console.error(`   [Bling] Erro no lote de saldos ${li+1}: ${err.message}`);
       throw err;
     }
-    await delay(500);
+    await delay(800);
   }
 
   console.log(`   [Bling] Saldos carregados! Montando resultado...`);
@@ -726,15 +744,9 @@ app.get('/api/produtos', async (req, res) => {
   }
 });
 
-// 👇 ROTA ADICIONADA: DISPARO MANUAL DE ALERTA NO WHATSAPP
+// 👇 ROTA DE DISPARO MANUAL — WhatsApp desativado temporariamente
 app.get('/api/disparar-alerta', async (req, res) => {
-    try {
-        console.log("\n🚨 [WhatsApp] Disparo manual de alerta solicitado via Dashboard!");
-        executarVerificacao(); // Dispara o processo em background
-        res.json({ sucesso: true, mensagem: "Varredura iniciada no fundo." });
-    } catch (error) {
-        res.status(500).json({ erro: "Erro ao disparar alerta" });
-    }
+    res.json({ sucesso: false, mensagem: "WhatsApp desativado temporariamente." });
 });
 
 app.get('/api/wms/produto/:codigo', async (req, res) => {
@@ -810,11 +822,12 @@ app.listen(3000, "0.0.0.0", () => {
   console.log("======================================================");
 });
 
-// WHATSAPP
-const wppClient = new Client({ authStrategy: new LocalAuth(), puppeteer: { args: ["--no-sandbox", "--disable-setuid-sandbox"] } });
-wppClient.on("qr", (qr) => { qrcode.generate(qr, { small: true }); });
-wppClient.on("ready", () => { console.log("✅ [Robô] WhatsApp conectado!"); });
-wppClient.initialize();
+// WHATSAPP — DESATIVADO TEMPORARIAMENTE
+// const wppClient = new Client({ authStrategy: new LocalAuth(), puppeteer: { args: ["--no-sandbox", "--disable-setuid-sandbox"] } });
+// wppClient.on("qr", (qr) => { qrcode.generate(qr, { small: true }); });
+// wppClient.on("ready", () => { console.log("✅ [Robô] WhatsApp conectado!"); });
+// wppClient.initialize();
+console.log("ℹ️  [WhatsApp] Robô desativado temporariamente.");
 
 function filtrarEmRisco(produtos) {
   return produtos.filter(p => {
@@ -845,63 +858,6 @@ function formatarProdutoIndividual(p) {
   return `📦 *SKU:* ${p.codigo || "S/COD"}\n🏷️ *Produto:* ${nomeLimpo}\n🎨 *Cor:* ${cor}  |  📏 *Tam:* ${tam}\n${linhaEstoque}`;
 }
 
-async function executarVerificacao() {
-  try {
-    const token = await obterAccessToken();
-    const produtos = await buscarEstoque(token);
-    let emRisco = filtrarEmRisco(produtos);
-
-    if (emRisco.length === 0) return;
-
-    emRisco.sort((a, b) => a.saldoFisicoTotal - b.saldoFisicoTotal);
-
-    const qtdZerados = emRisco.filter(p => p.saldoFisicoTotal === 0).length;
-    const qtdBaixos = emRisco.length - qtdZerados;
-
-    const conversas = await wppClient.getChats();
-    const grupoEncontrado = conversas.find(chat => chat.isGroup && chat.name === CONFIG.whatsapp.nomeDoGrupo);
-    if (!grupoEncontrado) return;
-
-    await wppClient.sendMessage(grupoEncontrado.id._serialized, 
-        `📊 *RESUMO DE ESTOQUE*\n\n` +
-        `Identificamos *${emRisco.length} produtos* que precisam de atenção:\n` +
-        `🛑 *${qtdZerados}* totalmente zerados.\n` +
-        `🟡 *${qtdBaixos}* com estoque baixo.\n\n` +
-        `⏳ _Iniciando o envio fracionado para não sobrecarregar o grupo..._`
-    );
-    await delay(3000);
-
-    const TAMANHO_LOTE = 20;             
-    const TEMPO_PAUSA_MINUTOS = 2;       
-    const TEMPO_PAUSA_MS = TEMPO_PAUSA_MINUTOS * 60 * 1000; 
-
-    for (let i = 0; i < emRisco.length; i += TAMANHO_LOTE) {
-        const lote = emRisco.slice(i, i + TAMANHO_LOTE);
-        const numLote = Math.floor(i / TAMANHO_LOTE) + 1;
-        const totalLotes = Math.ceil(emRisco.length / TAMANHO_LOTE);
-
-        await wppClient.sendMessage(grupoEncontrado.id._serialized, `📦 *Enviando Parte ${numLote} de ${totalLotes}* 👇`);
-        await delay(2000);
-
-        for (const produto of lote) {
-            await wppClient.sendMessage(grupoEncontrado.id._serialized, formatarProdutoIndividual(produto));
-            await delay(1500); 
-        }
-
-        if (i + TAMANHO_LOTE < emRisco.length) {
-            await wppClient.sendMessage(grupoEncontrado.id._serialized, 
-                `⏸️ _Pausa estratégica de ${TEMPO_PAUSA_MINUTOS} minutos para leitura. Já volto com os próximos..._`
-            );
-            await delay(TEMPO_PAUSA_MS); 
-        }
-    }
-
-    await delay(2000);
-    await wppClient.sendMessage(grupoEncontrado.id._serialized, `✅ *Fim da lista de alertas!* Todos os produtos em risco foram informados.`);
-
-  } catch (err) {
-    console.error("❌ Erro no WhatsApp:", err.message);
-  }
-}
-
-cron.schedule("0 * * * *", executarVerificacao, { timezone: "America/Sao_Paulo" });
+// WhatsApp verificação desativada temporariamente
+// async function executarVerificacao() { ... }
+// cron.schedule("0 * * * *", executarVerificacao, { timezone: "America/Sao_Paulo" });
