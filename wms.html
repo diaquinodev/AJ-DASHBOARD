@@ -157,23 +157,65 @@
         let loteDeEntrada = []; // O carrinho
         let operacaoAtual = 'E'; // 'E' (Entrada) ou 'S' (Saída)
 
-        // 🟢 CARREGAR CATÁLOGO (Silencioso e à prova de falhas)
+        // 🟢 CARREGAR CATÁLOGO — Cache instantâneo + Sync em segundo plano
         function carregarCatalogo() {
+            // 1. Tenta carregar do cache (instantâneo!)
+            fetch('/api/catalogo-cache')
+                .then(res => res.json())
+                .then(data => {
+                    if (data.produtos && data.produtos.length > 0) {
+                        catalogoBling = data.produtos;
+                        catalogoCarregado = true;
+                        console.log(`Catálogo carregado do cache: ${data.produtos.length} produtos`);
+                        if (document.getElementById('busca-manual').value.length >= 2) {
+                            filtrarCatalogo();
+                        }
+                        // 2. Dispara sync em segundo plano (não bloqueia)
+                        fetch('/api/catalogo-sync', { method: 'POST' })
+                            .then(() => {
+                                // Após 60s, recarrega o catálogo atualizado silenciosamente
+                                setTimeout(atualizarCatalogoSilencioso, 60000);
+                            })
+                            .catch(() => {});
+                    } else {
+                        // Cache vazio — carrega direto do Bling (primeira vez)
+                        console.log('Cache vazio, carregando direto do Bling...');
+                        carregarCatalogoDoBling();
+                    }
+                })
+                .catch(() => {
+                    carregarCatalogoDoBling();
+                });
+        }
+
+        function carregarCatalogoDoBling() {
             fetch('/api/produtos')
                 .then(res => res.json())
-                .then(data => { 
-                    catalogoBling = data; 
+                .then(data => {
+                    catalogoBling = data;
                     catalogoCarregado = true;
-                    // Se o operador já tinha digitado algo enquanto carregava, atualiza a lista na hora!
                     if (document.getElementById('busca-manual').value.length >= 2) {
                         filtrarCatalogo();
                     }
                 })
                 .catch(err => {
                     console.error("Erro ao puxar catálogo, tentando de novo...", err);
-                    setTimeout(carregarCatalogo, 3000); // Tenta novamente em 3 segundos
+                    setTimeout(carregarCatalogoDoBling, 3000);
                 });
         }
+
+        function atualizarCatalogoSilencioso() {
+            fetch('/api/catalogo-cache')
+                .then(res => res.json())
+                .then(data => {
+                    if (data.produtos && data.produtos.length > 0) {
+                        catalogoBling = data.produtos;
+                        console.log(`Catálogo atualizado silenciosamente: ${data.produtos.length} produtos`);
+                    }
+                })
+                .catch(() => {});
+        }
+
         carregarCatalogo();
 
         // 🔄 MUDAR MODO (ENTRADA / SAÍDA)

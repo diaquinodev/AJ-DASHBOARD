@@ -42,10 +42,65 @@ const CONFIG = {
 };
 
 // 📦 MEMÓRIAS VOLÁTEIS DO SERVIDOR
-let bancoDadosPlanilha = []; 
-let cacheProdutos = null;    
-let ultimoCacheHora = 0;     
-let cachePedidosRecentes = []; 
+let bancoDadosPlanilha = [];
+let cacheProdutos = null;
+let ultimoCacheHora = 0;
+let cachePedidosRecentes = [];
+
+// 📁 CACHE EM DISCO — Catálogo salvo em arquivo para carregamento instantâneo
+const CATALOGO_CACHE_FILE = path.join(__dirname, "catalogo-cache.json");
+let sincronizandoCatalogo = false;
+
+function lerCatalogoDoDisco() {
+  try {
+    if (fs.existsSync(CATALOGO_CACHE_FILE)) {
+      const raw = JSON.parse(fs.readFileSync(CATALOGO_CACHE_FILE, "utf8"));
+      console.log(`   [Cache] Catálogo carregado do disco: ${raw.produtos.length} produtos (salvo em ${new Date(raw.atualizadoEm).toLocaleString('pt-BR')})`);
+      return raw;
+    }
+  } catch (e) {
+    console.error("   [Cache] Erro ao ler cache do disco:", e.message);
+  }
+  return null;
+}
+
+function salvarCatalogoNoDisco(produtos) {
+  try {
+    const dados = { produtos, atualizadoEm: Date.now() };
+    fs.writeFileSync(CATALOGO_CACHE_FILE, JSON.stringify(dados));
+    console.log(`   [Cache] Catálogo salvo no disco: ${produtos.length} produtos`);
+  } catch (e) {
+    console.error("   [Cache] Erro ao salvar cache no disco:", e.message);
+  }
+}
+
+async function sincronizarCatalogoEmSegundoPlano() {
+  if (sincronizandoCatalogo) {
+    console.log("   [Sync] Sincronização já em andamento, pulando...");
+    return;
+  }
+  sincronizandoCatalogo = true;
+  try {
+    console.log("   [Sync] Iniciando sincronização do catálogo com Bling...");
+    const token = await obterAccessToken();
+    const produtos = await buscarEstoque(token);
+    cacheProdutos = produtos;
+    ultimoCacheHora = Date.now();
+    salvarCatalogoNoDisco(produtos);
+    console.log(`   [Sync] Sincronização concluída! ${produtos.length} produtos atualizados.`);
+  } catch (e) {
+    console.error("   [Sync] Falha na sincronização:", e.message);
+  } finally {
+    sincronizandoCatalogo = false;
+  }
+}
+
+// Carrega cache do disco ao iniciar o servidor (instantâneo)
+const cacheDisco = lerCatalogoDoDisco();
+if (cacheDisco && cacheDisco.produtos.length > 0) {
+  cacheProdutos = cacheDisco.produtos;
+  ultimoCacheHora = cacheDisco.atualizadoEm;
+} 
 
 function lerTokens() {
   if (!fs.existsSync(CONFIG.bling.tokenFile)) return null;
@@ -767,6 +822,7 @@ app.get('/api/produtos', async (req, res) => {
     cacheProdutos = produtos;
     ultimoCacheHora = Date.now();
     console.log(`   [API] /api/produtos — ${produtos.length} produtos carregados e cacheados.`);
+    salvarCatalogoNoDisco(produtos);
 
     res.json(produtos);
   } catch (error) {
@@ -779,6 +835,28 @@ app.get('/api/produtos', async (req, res) => {
 // 👇 ROTA DE DISPARO MANUAL — WhatsApp desativado temporariamente
 app.get('/api/disparar-alerta', async (req, res) => {
     res.json({ sucesso: false, mensagem: "WhatsApp desativado temporariamente." });
+});
+
+// 📦 ROTA CACHE — Retorna catálogo instantaneamente do cache
+app.get('/api/catalogo-cache', (req, res) => {
+  if (cacheProdutos && cacheProdutos.length > 0) {
+    return res.json({
+      produtos: cacheProdutos,
+      atualizadoEm: ultimoCacheHora,
+      fonte: 'cache'
+    });
+  }
+  res.json({ produtos: [], atualizadoEm: 0, fonte: 'vazio' });
+});
+
+// 🔄 ROTA SYNC — Força sincronização em segundo plano e retorna status
+app.post('/api/catalogo-sync', async (req, res) => {
+  if (sincronizandoCatalogo) {
+    return res.json({ status: 'em_andamento', mensagem: 'Sincronização já em andamento.' });
+  }
+  // Dispara em segundo plano, não bloqueia a resposta
+  sincronizarCatalogoEmSegundoPlano();
+  res.json({ status: 'iniciado', mensagem: 'Sincronização iniciada em segundo plano.' });
 });
 
 app.get('/api/wms/produto/:codigo', async (req, res) => {
@@ -852,6 +930,18 @@ app.listen(3000, "0.0.0.0", () => {
   console.log("");
   console.log("   ⚠️  Passe esses links acima para seus colaboradores!");
   console.log("======================================================");
+
+  // 🔄 Sincroniza catálogo com Bling 5 segundos após iniciar
+  setTimeout(() => {
+    console.log("\n   [Auto-Sync] Atualizando catálogo em segundo plano...");
+    sincronizarCatalogoEmSegundoPlano();
+  }, 5000);
+
+  // 🔄 Re-sincroniza a cada 30 minutos automaticamente
+  setInterval(() => {
+    console.log("\n   [Auto-Sync] Sincronização periódica (30 min)...");
+    sincronizarCatalogoEmSegundoPlano();
+  }, 30 * 60 * 1000);
 });
 
 // WHATSAPP — DESATIVADO TEMPORARIAMENTE
