@@ -409,74 +409,270 @@ app.post('/api/checkout/finalizar', async (req, res) => {
 
 
 // ──────────────────────────────────────────────
+// 🔍 DIAGNÓSTICO DE SKUs (BLING vs UPSELLER)
+// ──────────────────────────────────────────────
+// Acesse: http://localhost:3000/api/debug-skus
+// Mostra os primeiros 30 produtos com TODAS as informações do Bling,
+// incluindo variações, para você comparar com os SKUs da UpSeller.
+app.get('/api/debug-skus', async (req, res) => {
+    try {
+        const limite = parseInt(req.query.limite) || 30;
+        const token = await obterAccessToken();
+        console.log(`\n🔍 [Debug] Buscando ${limite} produtos com detalhes completos...`);
+
+        // Busca lista de produtos
+        const respLista = await axios.get("https://www.bling.com.br/Api/v3/produtos", {
+            headers: { Authorization: `Bearer ${token}` },
+            params: { pagina: 1, limite, tipo: 'T' }
+        });
+        const lista = respLista.data?.data ?? [];
+
+        // Busca detalhes de cada produto (inclui variações)
+        const resultados = [];
+        for (const prod of lista) {
+            try {
+                const respDetalhe = await axios.get(`https://www.bling.com.br/Api/v3/produtos/${prod.id}`, {
+                    headers: { Authorization: `Bearer ${token}` }
+                });
+                const d = respDetalhe.data?.data;
+                resultados.push({
+                    id: d.id,
+                    nome: d.nome,
+                    codigo: d.codigo,
+                    tipo: d.tipo,
+                    variacoes: (d.variacoes || []).map(v => ({
+                        id: v.id,
+                        nome: v.nome,
+                        codigo: v.codigo,
+                        gtin: v.gtin
+                    }))
+                });
+                await delay(350);
+            } catch (e) {
+                resultados.push({ id: prod.id, nome: prod.nome, codigo: prod.codigo, erro: e.message });
+            }
+        }
+
+        console.log(`✅ [Debug] ${resultados.length} produtos analisados.`);
+
+        // Monta HTML legível para facilitar a análise
+        let html = `<!DOCTYPE html><html><head><meta charset="UTF-8">
+        <title>Debug SKUs - Bling vs UpSeller</title>
+        <style>
+            body { font-family: monospace; background: #1a1a2e; color: #eee; padding: 20px; }
+            h1 { color: #00d4ff; }
+            .produto { background: #16213e; border: 1px solid #0f3460; border-radius: 8px; padding: 15px; margin: 15px 0; }
+            .produto h3 { color: #e94560; margin: 0 0 10px 0; }
+            .campo { margin: 4px 0; }
+            .label { color: #888; }
+            .valor { color: #00ff88; font-weight: bold; }
+            .variacao { background: #0f3460; padding: 8px; margin: 5px 0; border-radius: 4px; border-left: 3px solid #e94560; }
+            .aviso { background: #e94560; color: #fff; padding: 15px; border-radius: 8px; margin: 15px 0; }
+        </style></head><body>
+        <h1>🔍 Diagnóstico de SKUs — Bling</h1>
+        <div class="aviso">
+            <strong>INSTRUÇÕES:</strong> Compare os códigos abaixo com os SKUs que aparecem no Armazém da UpSeller.<br>
+            O campo que bater EXATAMENTE é o que devemos usar na exportação.<br>
+            Procure especialmente nos campos <strong>"codigo"</strong> das variações.
+        </div>
+        <p>Mostrando ${resultados.length} produtos. Para ver mais: <code>/api/debug-skus?limite=100</code></p>`;
+
+        for (const r of resultados) {
+            html += `<div class="produto">`;
+            html += `<h3>${r.nome || 'Sem Nome'}</h3>`;
+            html += `<div class="campo"><span class="label">ID Bling:</span> <span class="valor">${r.id}</span></div>`;
+            html += `<div class="campo"><span class="label">Código Produto-Pai:</span> <span class="valor">${r.codigo || 'VAZIO'}</span></div>`;
+            html += `<div class="campo"><span class="label">Tipo:</span> <span class="valor">${r.tipo || '?'}</span></div>`;
+
+            if (r.variacoes && r.variacoes.length > 0) {
+                html += `<div class="campo" style="margin-top:10px"><span class="label">📦 VARIAÇÕES (${r.variacoes.length}):</span></div>`;
+                for (const v of r.variacoes) {
+                    html += `<div class="variacao">`;
+                    html += `<div class="campo"><span class="label">Variação ID:</span> <span class="valor">${v.id}</span></div>`;
+                    html += `<div class="campo"><span class="label">Nome:</span> <span class="valor">${v.nome || 'VAZIO'}</span></div>`;
+                    html += `<div class="campo"><span class="label">Código (SKU):</span> <span class="valor" style="color:#ff0;font-size:1.2em">${v.codigo || 'VAZIO'}</span></div>`;
+                    html += `<div class="campo"><span class="label">GTIN/EAN:</span> <span class="valor">${v.gtin || 'VAZIO'}</span></div>`;
+                    html += `</div>`;
+                }
+            } else {
+                html += `<div class="campo" style="color:#e94560">⚠️ Sem variações — produto simples</div>`;
+            }
+            html += `</div>`;
+        }
+
+        html += `</body></html>`;
+        res.setHeader('Content-Type', 'text/html; charset=utf-8');
+        res.send(html);
+
+    } catch (e) {
+        console.error("❌ [Debug]", e.message);
+        res.status(500).json({ erro: e.message });
+    }
+});
+
+
+// ──────────────────────────────────────────────
 // 🟢 EXPORTAÇÃO UPSELLER (MÁSCARA DE ESTOQUE + ZIP)
+// Agora busca VARIAÇÕES dos produtos (onde está o SKU real da UpSeller)
 // ──────────────────────────────────────────────
 app.get('/api/exportar-upseller', async (req, res) => {
     try {
         const baseFake = parseInt(req.query.base) || 2000;
         console.log(`\n📦 [UpSeller] Gerando ZIP com Base Fake: +${baseFake}...`);
-        
-        const token = await obterAccessToken();
-        const produtos = await buscarEstoque(token);
 
-        if (!produtos || produtos.length === 0) {
-            return res.status(404).json({ erro: "Nenhum produto encontrado no Bling para exportar." });
+        const token = await obterAccessToken();
+
+        // 1. Busca todos os produtos
+        const todosProdutos = [];
+        let pagina = 1;
+        let temMais = true;
+        do {
+            const resp = await axios.get("https://www.bling.com.br/Api/v3/produtos", {
+                headers: { Authorization: `Bearer ${token}` },
+                params: { pagina, limite: 100, tipo: 'T' }
+            });
+            const data = resp.data?.data ?? [];
+            todosProdutos.push(...data);
+            if (data.length < 100) temMais = false;
+            else pagina++;
+            await delay(500);
+        } while (temMais);
+
+        if (todosProdutos.length === 0) {
+            return res.status(404).json({ erro: "Nenhum produto encontrado no Bling." });
         }
 
-        const linhasPlanilha = [];
+        console.log(`   [UpSeller] ${todosProdutos.length} produtos encontrados. Buscando detalhes e variações...`);
+
+        // 2. Busca detalhes de cada produto (para pegar variações + saldos)
+        const linhasExport = []; // { sku, nome, saldo }
+        let contadorDetalhe = 0;
+
+        for (const prod of todosProdutos) {
+            contadorDetalhe++;
+            if (contadorDetalhe % 50 === 0) {
+                console.log(`   [UpSeller] Processando ${contadorDetalhe}/${todosProdutos.length}...`);
+            }
+
+            try {
+                const respDetalhe = await axios.get(`https://www.bling.com.br/Api/v3/produtos/${prod.id}`, {
+                    headers: { Authorization: `Bearer ${token}` }
+                });
+                const detalhe = respDetalhe.data?.data;
+
+                if (detalhe.variacoes && detalhe.variacoes.length > 0) {
+                    // Produto com variações — busca saldo de cada variação
+                    const idsVariacoes = detalhe.variacoes.map(v => v.id).filter(id => id);
+
+                    let saldosVar = [];
+                    if (idsVariacoes.length > 0) {
+                        const paramsEst = new URLSearchParams();
+                        for (const vid of idsVariacoes) paramsEst.append("idsProdutos[]", vid);
+                        try {
+                            const respEst = await axios.get("https://www.bling.com.br/Api/v3/estoques/saldos", {
+                                headers: { Authorization: `Bearer ${token}` },
+                                params: paramsEst
+                            });
+                            saldosVar = respEst.data?.data ?? [];
+                        } catch (e) {}
+                    }
+
+                    const mapaSaldo = new Map();
+                    for (const s of saldosVar) {
+                        const pid = s.produto?.id || s.id;
+                        if (pid) mapaSaldo.set(pid, s.saldoFisicoTotal ?? 0);
+                    }
+
+                    for (const v of detalhe.variacoes) {
+                        const skuVar = (v.codigo || "").trim();
+                        if (skuVar) {
+                            linhasExport.push({
+                                sku: skuVar,
+                                nome: v.nome || detalhe.nome,
+                                saldo: mapaSaldo.get(v.id) ?? 0
+                            });
+                        }
+                    }
+                } else {
+                    // Produto simples (sem variações) — usa código do próprio produto
+                    const skuSimples = (detalhe.codigo || "").trim();
+                    if (skuSimples) {
+                        // Busca saldo
+                        let saldo = 0;
+                        try {
+                            const respEst = await axios.get("https://www.bling.com.br/Api/v3/estoques/saldos", {
+                                headers: { Authorization: `Bearer ${token}` },
+                                params: { "idsProdutos[]": detalhe.id }
+                            });
+                            saldo = respEst.data?.data?.[0]?.saldoFisicoTotal ?? 0;
+                        } catch (e) {}
+
+                        linhasExport.push({
+                            sku: skuSimples,
+                            nome: detalhe.nome,
+                            saldo
+                        });
+                    }
+                }
+            } catch (e) {
+                // Se falhar o detalhe de um produto, pula
+            }
+            await delay(350);
+        }
+
+        console.log(`   [UpSeller] ${linhasExport.length} SKUs (com variações) prontos para exportar.`);
+
+        // 3. Monta a planilha no formato AOA (Matriz) que a UpSeller aceita
         let logConteudo = `====================================================\n`;
         logConteudo += `📊 RELATÓRIO DE EXPORTAÇÃO UPSELLER (ESTOQUE ESPELHO)\n`;
         logConteudo += `Data: ${new Date().toLocaleString('pt-BR')}\n`;
         logConteudo += `Base Adicional: +${baseFake} unidades\n`;
+        logConteudo += `Total de SKUs exportados: ${linhasExport.length}\n`;
         logConteudo += `====================================================\n\n`;
 
         let qtdSucesso = 0;
         let qtdZerado = 0;
-        let ignorados = 0;
 
-        // Nomes exatos das colunas da UpSeller
-        const colSKU = "SKU*";
-        const colEstoqueBaixo = "Estoque Baixo\n(Não será atualizado se não for preenchido)";
-        const colQtdTotal = "Qtd. Total Atualizado\n(Não será atualizado se não for preenchido)";
-        const colCusto = "Custo Médio Atualizado\n(Não será atualizado se não for preenchido)";
+        // Cabeçalho exato da UpSeller
+        const dadosPlanilha = [
+            [
+                "SKU*",
+                "Estoque Baixo\n(Não será atualizado se não for preenchido)",
+                "Qtd. Total Atualizado\n(Não será atualizado se não for preenchido)",
+                "Custo Médio Atualizado\n(Não será atualizado se não for preenchido)"
+            ]
+        ];
 
-        produtos.forEach(p => {
-            const sku = p.codigo;
-            const nome = p.descricao || "Sem Nome";
-            const quantidadeReal = parseInt(p.saldoFisicoTotal) || 0;
+        for (const item of linhasExport) {
+            // Limpeza rigorosa do SKU (remove espaços invisíveis, trim, normaliza)
+            const skuLimpo = item.sku
+                .replace(/[\u200B\u200C\u200D\uFEFF\u00A0]/g, '') // caracteres invisíveis
+                .replace(/\s+/g, ' ')  // múltiplos espaços → 1 espaço
+                .trim();
 
-            if (!sku || sku === "S/COD") {
-                ignorados++;
-                logConteudo += `[IGNORADO] Produto sem SKU: ${nome}\n`;
-                return;
-            }
-
+            const quantidadeReal = parseInt(item.saldo) || 0;
             let quantidadeUpSeller = 0;
-            
+
             if (quantidadeReal > 0) {
                 quantidadeUpSeller = baseFake + quantidadeReal;
                 qtdSucesso++;
             } else {
                 qtdZerado++;
-                logConteudo += `[ALERTA] Estoque ZERO para o SKU: ${sku} (${nome}) - Enviado como 0.\n`;
+                logConteudo += `[ZERADO] ${skuLimpo} — ${item.nome}\n`;
             }
 
-            linhasPlanilha.push({
-                [colSKU]: sku,
-                [colEstoqueBaixo]: "",
-                [colQtdTotal]: quantidadeUpSeller,
-                [colCusto]: ""
-            });
-        });
+            dadosPlanilha.push([skuLimpo, "", quantidadeUpSeller, ""]);
+        }
 
         logConteudo += `\n====================================================\n`;
-        logConteudo += `RESUMO DA EXPORTAÇÃO:\n`;
+        logConteudo += `RESUMO:\n`;
         logConteudo += `- SKUs com Estoque Mascarado (+${baseFake}): ${qtdSucesso}\n`;
-        logConteudo += `- SKUs Zerados (Enviados como 0): ${qtdZerado}\n`;
-        logConteudo += `- SKUs Ignorados (Sem Código): ${ignorados}\n`;
+        logConteudo += `- SKUs Zerados (enviados como 0): ${qtdZerado}\n`;
+        logConteudo += `- Total de linhas na planilha: ${linhasExport.length}\n`;
         logConteudo += `====================================================\n`;
 
-        const worksheet = xlsx.utils.json_to_sheet(linhasPlanilha);
+        // Gera planilha via AOA (garante cabeçalho exato com \n)
+        const worksheet = xlsx.utils.aoa_to_sheet(dadosPlanilha);
         const workbook = xlsx.utils.book_new();
         xlsx.utils.book_append_sheet(workbook, worksheet, "Sheet1");
         const excelBuffer = xlsx.write(workbook, { bookType: 'xlsx', type: 'buffer' });
@@ -486,15 +682,13 @@ app.get('/api/exportar-upseller', async (req, res) => {
         res.setHeader('Content-Type', 'application/zip');
 
         const archive = archiver('zip', { zlib: { level: 9 } });
-        
         archive.on('error', function(err) { throw err; });
         archive.pipe(res);
-
         archive.append(excelBuffer, { name: `Update_warehouse_SKU_${dataAtual}.xlsx` });
         archive.append(logConteudo, { name: `Relatorio_Seguranca.txt` });
-
         await archive.finalize();
-        console.log(`✅ [UpSeller] ZIP gerado e enviado com sucesso!`);
+
+        console.log(`✅ [UpSeller] ZIP gerado com ${linhasExport.length} SKUs!`);
 
     } catch (e) {
         console.error("❌ Erro ao exportar ZIP UpSeller:", e.message);
