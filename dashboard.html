@@ -33,13 +33,8 @@
                 </div>
                 
                 <div class="flex flex-col sm:flex-row gap-3 w-full xl:w-auto items-center">
-                    
-                    <div class="relative flex items-center" title="Base para Estoque Espelho">
-                        <span class="absolute left-3 text-indigo-400 font-black">+</span>
-                        <input type="number" id="baseEstoque" value="2000" class="w-24 pl-7 pr-3 py-2.5 bg-slate-100 border border-slate-200 rounded-lg focus:bg-white focus:border-indigo-500 outline-none transition text-center font-black text-indigo-700 shadow-sm">
-                    </div>
-                    
-                    <button id="btnExportar" onclick="exportarUpSeller()" class="bg-emerald-600 hover:bg-emerald-700 text-white px-5 py-2.5 rounded-lg font-bold flex items-center justify-center gap-2 shadow-md hover:shadow-lg transition w-full sm:w-auto">
+
+                    <button id="btnExportar" onclick="exportarUpSeller()" class="bg-emerald-600 hover:bg-emerald-700 text-white px-5 py-2.5 rounded-lg font-bold flex items-center justify-center gap-2 shadow-md hover:shadow-lg transition w-full sm:w-auto" title="Regra: estoque real >10 = 2010 | ≤10 = 0">
                         <i data-lucide="file-archive" class="w-5 h-5"></i> Exportar ZIP UpSeller
                     </button>
 
@@ -117,17 +112,15 @@
 
         // 👇 NOVA FUNÇÃO: BAIXAR O ZIP DA UPSELLER 👇
         async function exportarUpSeller() {
-            const base = document.getElementById('baseEstoque').value || 2000;
             const btn = document.getElementById('btnExportar');
             const iconOriginal = btn.innerHTML;
-            
+
             btn.innerHTML = `<i data-lucide="loader-2" class="w-5 h-5 animate-spin"></i> Compactando ZIP...`;
             btn.disabled = true;
             lucide.createIcons();
 
             try {
-                // Chama a API pedindo o arquivo passando a base que o usuário digitou
-                const response = await fetch(`/api/exportar-upseller?base=${base}`);
+                const response = await fetch(`/api/exportar-upseller`);
                 if (!response.ok) throw new Error("Falha ao gerar arquivo.");
                 
                 // Mágica para fazer o download automático no navegador

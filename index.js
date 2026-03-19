@@ -794,8 +794,7 @@ app.get('/api/exportar-upseller', async (req, res) => {
     req.setTimeout(120000);
     res.setTimeout(120000);
     try {
-        const baseFake = parseInt(req.query.base) || 2000;
-        console.log(`\n📦 [UpSeller] Gerando ZIP com Base Fake: +${baseFake}...`);
+        console.log(`\n📦 [UpSeller] Gerando ZIP (regra: >10un = 2010, ≤10un = 0)...`);
 
         // Usa cache se disponível, senão busca do Bling
         let produtos;
@@ -819,10 +818,10 @@ app.get('/api/exportar-upseller', async (req, res) => {
         let logConteudo = `====================================================\n`;
         logConteudo += `📊 RELATÓRIO DE EXPORTAÇÃO UPSELLER (ESTOQUE ESPELHO)\n`;
         logConteudo += `Data: ${new Date().toLocaleString('pt-BR')}\n`;
-        logConteudo += `Base Adicional: +${baseFake} unidades\n`;
+        logConteudo += `Regra: Estoque real > 10 → envia 2010 | Estoque ≤ 10 → envia 0\n`;
         logConteudo += `====================================================\n\n`;
 
-        let qtdSucesso = 0;
+        let qtdAtivo = 0;
         let qtdZerado = 0;
         let qtdIgnorados = 0;
         let qtdSemMatch = 0;
@@ -843,11 +842,9 @@ app.get('/api/exportar-upseller', async (req, res) => {
 
         if (usarCatalogoReal) {
             // ====== MODO CATÁLOGO REAL ======
-            // Usa os SKUs exatos da UpSeller e faz matching com Bling
             console.log(`   [UpSeller] Modo CATÁLOGO REAL: ${catalogoUpSeller.skus.length} SKUs do armazém`);
             logConteudo += `MODO: Catálogo Real UpSeller (${catalogoUpSeller.skus.length} SKUs)\n\n`;
 
-            // Constrói mapa normalizado dos produtos Bling
             const mapaBling = construirMapaBling(produtos);
             console.log(`   [UpSeller] Mapa Bling construído: ${mapaBling.size} variações mapeadas`);
 
@@ -865,26 +862,26 @@ app.get('/api/exportar-upseller', async (req, res) => {
                     qtdSemMatch++;
                     const chaveDebug = normalizarChaveMatch(parsed.ref, parsed.cor, parsed.tam);
                     logConteudo += `[SEM MATCH] ${skuReal} → chave: ${chaveDebug}\n`;
-                    // Inclui na planilha com estoque 0 para não perder o SKU
-                    dadosPlanilha.push([skuReal, "", 0, ""]);
+                    // NÃO inclui na planilha — evita criar SKUs fantasma na UpSeller
                     continue;
                 }
 
                 const quantidadeReal = parseInt(produtoBling.saldoFisicoTotal) || 0;
                 let quantidadeUpSeller = 0;
 
-                if (quantidadeReal > 0) {
-                    quantidadeUpSeller = baseFake + quantidadeReal;
-                    qtdSucesso++;
+                if (quantidadeReal > 10) {
+                    quantidadeUpSeller = 2010;
+                    qtdAtivo++;
+                    logConteudo += `[ATIVO] ${skuReal} — real: ${quantidadeReal} → 2010\n`;
                 } else {
                     qtdZerado++;
-                    logConteudo += `[ZERADO] ${skuReal} — Bling: ${produtoBling.descricao}\n`;
+                    logConteudo += `[ZERADO] ${skuReal} — real: ${quantidadeReal} (≤10)\n`;
                 }
 
                 dadosPlanilha.push([skuReal, "", quantidadeUpSeller, ""]);
             }
         } else {
-            // ====== MODO LEGADO (geração de SKU) ======
+            // ====== MODO LEGADO (geração de SKU a partir do Bling) ======
             console.log(`   [UpSeller] Modo LEGADO: gerando SKUs a partir dos nomes Bling`);
             logConteudo += `MODO: Geração automática de SKU (sem catálogo UpSeller)\n\n`;
 
@@ -893,7 +890,6 @@ app.get('/api/exportar-upseller', async (req, res) => {
 
                 if (!skuUpSeller) {
                     qtdIgnorados++;
-                    logConteudo += `[IGNORADO] Produto-pai sem COR: ${p.descricao}\n`;
                     continue;
                 }
 
@@ -904,25 +900,24 @@ app.get('/api/exportar-upseller', async (req, res) => {
                 const quantidadeReal = parseInt(p.saldoFisicoTotal) || 0;
                 let quantidadeUpSeller = 0;
 
-                if (quantidadeReal > 0) {
-                    quantidadeUpSeller = baseFake + quantidadeReal;
-                    qtdSucesso++;
+                if (quantidadeReal > 10) {
+                    quantidadeUpSeller = 2010;
+                    qtdAtivo++;
                 } else {
                     qtdZerado++;
-                    logConteudo += `[ZERADO] ${skuLimpo} — ${p.descricao}\n`;
                 }
 
                 dadosPlanilha.push([skuLimpo, "", quantidadeUpSeller, ""]);
             }
         }
 
-        const totalExportados = qtdSucesso + qtdZerado + qtdSemMatch;
+        const totalExportados = qtdAtivo + qtdZerado;
 
         logConteudo += `\n====================================================\n`;
         logConteudo += `RESUMO:\n`;
-        logConteudo += `- SKUs com Estoque Mascarado (+${baseFake}): ${qtdSucesso}\n`;
-        logConteudo += `- SKUs Zerados (enviados como 0): ${qtdZerado}\n`;
-        if (qtdSemMatch > 0) logConteudo += `- SKUs SEM MATCH no Bling: ${qtdSemMatch}\n`;
+        logConteudo += `- SKUs ATIVOS (estoque >10, enviado 2010): ${qtdAtivo}\n`;
+        logConteudo += `- SKUs ZERADOS (estoque ≤10, enviado 0): ${qtdZerado}\n`;
+        if (qtdSemMatch > 0) logConteudo += `- SKUs SEM MATCH no Bling (não exportados): ${qtdSemMatch}\n`;
         logConteudo += `- Ignorados: ${qtdIgnorados}\n`;
         logConteudo += `- Total de linhas na planilha: ${totalExportados}\n`;
         logConteudo += `====================================================\n`;
