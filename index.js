@@ -87,34 +87,53 @@ async function buscarEstoque(accessToken) {
 
   console.log("   [Bling] A iniciar varredura completa do catálogo...");
   do {
-    const resp = await axios.get("https://www.bling.com.br/Api/v3/produtos", {
-      headers: { Authorization: `Bearer ${accessToken}` },
-      params: { pagina, limite: 100, tipo: 'T' } 
-    });
-    
-    const data = resp.data?.data ?? [];
-    todosProdutos.push(...data);
-    
-    if (data.length < 100) temMais = false;
-    else pagina++;
-    await delay(500); 
+    try {
+      const resp = await axios.get("https://www.bling.com.br/Api/v3/produtos", {
+        headers: { Authorization: `Bearer ${accessToken}` },
+        params: { pagina, limite: 100, tipo: 'T' },
+        timeout: 30000
+      });
+
+      const data = resp.data?.data ?? [];
+      todosProdutos.push(...data);
+      console.log(`   [Bling] Página ${pagina}: ${data.length} produtos carregados (total: ${todosProdutos.length})`);
+
+      if (data.length < 100) temMais = false;
+      else pagina++;
+    } catch (err) {
+      console.error(`   [Bling] Erro na página ${pagina}: ${err.message}`);
+      throw err;
+    }
+    await delay(500);
   } while (temMais);
-  
+
+  console.log(`   [Bling] Catálogo completo: ${todosProdutos.length} produtos. Buscando saldos...`);
+
   const ids = todosProdutos.map(p => p.id).filter(id => id);
   const lotes = [];
   for (let i = 0; i < ids.length; i += 50) lotes.push(ids.slice(i, i + 50));
 
   const saldos = [];
-  for (const lote of lotes) {
-    const params = new URLSearchParams();
-    for (const id of lote) params.append("idsProdutos[]", id);
-    const resp = await axios.get("https://www.bling.com.br/Api/v3/estoques/saldos", {
-      headers: { Authorization: `Bearer ${accessToken}` },
-      params: params
-    });
-    saldos.push(...(resp.data?.data ?? []));
-    await delay(500); 
+  for (let li = 0; li < lotes.length; li++) {
+    const lote = lotes[li];
+    try {
+      const params = new URLSearchParams();
+      for (const id of lote) params.append("idsProdutos[]", id);
+      const resp = await axios.get("https://www.bling.com.br/Api/v3/estoques/saldos", {
+        headers: { Authorization: `Bearer ${accessToken}` },
+        params: params,
+        timeout: 30000
+      });
+      saldos.push(...(resp.data?.data ?? []));
+      console.log(`   [Bling] Saldos: lote ${li+1}/${lotes.length} OK`);
+    } catch (err) {
+      console.error(`   [Bling] Erro no lote de saldos ${li+1}: ${err.message}`);
+      throw err;
+    }
+    await delay(500);
   }
+
+  console.log(`   [Bling] Saldos carregados! Montando resultado...`);
 
   const mapaSaldos = new Map();
   for (const s of saldos) {
@@ -578,8 +597,19 @@ app.get('/api/exportar-upseller', async (req, res) => {
         const baseFake = parseInt(req.query.base) || 2000;
         console.log(`\n📦 [UpSeller] Gerando ZIP com Base Fake: +${baseFake}...`);
 
-        const token = await obterAccessToken();
-        const produtos = await buscarEstoque(token);
+        // Usa cache se disponível (mesmo dados do Dashboard), senão busca do Bling
+        let produtos;
+        const trintaMinutos = 1800000;
+        if (cacheProdutos && (Date.now() - ultimoCacheHora < trintaMinutos)) {
+            console.log(`   [UpSeller] Usando cache do Dashboard (${cacheProdutos.length} produtos)`);
+            produtos = cacheProdutos;
+        } else {
+            console.log(`   [UpSeller] Cache vazio/expirado, buscando do Bling...`);
+            const token = await obterAccessToken();
+            produtos = await buscarEstoque(token);
+            cacheProdutos = produtos;
+            ultimoCacheHora = Date.now();
+        }
 
         if (!produtos || produtos.length === 0) {
             return res.status(404).json({ erro: "Nenhum produto encontrado no Bling." });
