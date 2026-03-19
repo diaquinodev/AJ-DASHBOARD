@@ -248,11 +248,24 @@
             }
 
             const matchExato = catalogoBling.find(p => String(p.codigo).toLowerCase() === termoSeguro);
-            
+
             if (matchExato) {
                 buscarNaAPI(matchExato.codigo);
             } else {
-                const parciais = catalogoBling.filter(p => String(p.codigo).toLowerCase().includes(termoSeguro) || String(p.descricao).toLowerCase().includes(termoSeguro));
+                // Se digitou número, prioriza referência no nome (ex: "31-CONJUNTO...")
+                let parciais;
+                const isNum = /^\d+$/.test(termoSeguro);
+                if (isNum) {
+                    parciais = catalogoBling.filter(p => {
+                        const desc = String(p.descricao).toLowerCase();
+                        return desc.startsWith(termoSeguro + '-') || desc.startsWith(termoSeguro + ' -') || desc.startsWith(termoSeguro + ' ');
+                    });
+                    if (parciais.length === 0) {
+                        parciais = catalogoBling.filter(p => String(p.descricao).toLowerCase().includes(termoSeguro));
+                    }
+                } else {
+                    parciais = catalogoBling.filter(p => String(p.codigo).toLowerCase().includes(termoSeguro) || String(p.descricao).toLowerCase().includes(termoSeguro));
+                }
                 
                 if (parciais.length === 1) {
                     buscarNaAPI(parciais[0].codigo);
@@ -480,7 +493,24 @@
                 return;
             }
 
-            const filtrados = catalogoBling.filter(p => String(p.codigo).toLowerCase().includes(termo) || String(p.descricao).toLowerCase().includes(termo)).slice(0, 50);
+            // Busca inteligente: prioriza referência no início do nome (ex: "31-CONJUNTO...")
+            const isNumero = /^\d+$/.test(termo);
+            let filtrados;
+            if (isNumero) {
+                // Se digitou só número, busca pela referência no início do nome (ex: "31-" ou "31 -")
+                const exatos = catalogoBling.filter(p => {
+                    const desc = String(p.descricao).toLowerCase();
+                    return desc.startsWith(termo + '-') || desc.startsWith(termo + ' -') || desc.startsWith(termo + ' ');
+                });
+                if (exatos.length > 0) {
+                    filtrados = exatos.slice(0, 50);
+                } else {
+                    // Fallback: busca normal
+                    filtrados = catalogoBling.filter(p => String(p.descricao).toLowerCase().includes(termo)).slice(0, 50);
+                }
+            } else {
+                filtrados = catalogoBling.filter(p => String(p.codigo).toLowerCase().includes(termo) || String(p.descricao).toLowerCase().includes(termo)).slice(0, 50);
+            }
 
             if (filtrados.length === 0) {
                 lista.innerHTML = `<li class="p-4 text-slate-500 text-center font-medium">Nenhum produto encontrado.</li>`;
