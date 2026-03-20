@@ -193,7 +193,7 @@
             lucide.createIcons();
 
             try {
-                await fetch('http://localhost:3000/api/disparar-alerta');
+                await fetch('/api/disparar-alerta');
                 alert("🚨 Ordem enviada! O Robô vai varrer o estoque e mandar no WhatsApp em alguns instantes.");
             } catch (e) {
                 alert("❌ Erro ao comunicar. O terminal 'node index.js' está rodando?");
@@ -399,7 +399,7 @@
 
         async function carregarDados() {
             try {
-                const response = await fetch('http://localhost:3000/api/produtos');
+                const response = await fetch('/api/produtos');
                 todosOsProdutos = await response.json();
                 produtosAgrupados = agruparProdutos(todosOsProdutos);
                 
