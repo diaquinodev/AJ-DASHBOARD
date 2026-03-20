@@ -437,15 +437,23 @@ app.post('/api/checkout/upload-csv', upload.single('arquivo'), async (req, res) 
             const normalizar = (texto) => String(texto).normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, "").toLowerCase();
             
             const acharColunaExata = (nomesPossiveis) => {
-                return colunas.find(colReal => {
-                    const colLimpa = normalizar(colReal);
-                    return nomesPossiveis.some(nome => colLimpa === normalizar(nome) || colLimpa.includes(normalizar(nome)));
-                });
+                // Prioriza match exato primeiro
+                for (const nome of nomesPossiveis) {
+                    const exato = colunas.find(c => normalizar(c) === normalizar(nome));
+                    if (exato) return exato;
+                }
+                // Depois tenta substring (apenas para nomes com 6+ caracteres para evitar falsos positivos)
+                for (const nome of nomesPossiveis) {
+                    if (normalizar(nome).length < 6) continue;
+                    const parcial = colunas.find(c => normalizar(c).includes(normalizar(nome)));
+                    if (parcial) return parcial;
+                }
+                return undefined;
             };
 
             const colPedido = acharColunaExata(['Nº de Pedido da Plataforma', 'code', 'pedido']) || colunas[0];
             const colSku = acharColunaExata(['SKU (Armazém)', 'Order Items__reference', 'sku']) || 'sku';
-            const colNome = acharColunaExata(['Nome do Produto', 'Nome do Anúncio', 'Order Items__name', 'nome']) || 'name';
+            const colNome = acharColunaExata(['Nome do Produto', 'Nome do Anúncio', 'Order Items__name']) || 'name';
             
             // 🚨 SOLUÇÃO SNIPER PARA A QUANTIDADE
             const colQtd = acharColunaExata(['Qtd. do Produto', 'Order Items__quantity']) || 
@@ -484,7 +492,10 @@ app.post('/api/checkout/upload-csv', upload.single('arquivo'), async (req, res) 
         }
         novosItens = Array.from(mapaAgrupado.values());
 
-        bancoDadosPlanilha = [...bancoDadosPlanilha, ...novosItens];
+        // Remove itens já existentes para o mesmo pedido+sku (evita duplicatas ao re-subir)
+        const chavesNovas = new Set(novosItens.map(i => `${i.pedido}|||${i.sku}`));
+        bancoDadosPlanilha = bancoDadosPlanilha.filter(i => !chavesNovas.has(`${i.pedido}|||${i.sku}`));
+        bancoDadosPlanilha.push(...novosItens);
 
         console.log(`✅ [Checkout] Arquivo LIDO! A memória agora tem ${bancoDadosPlanilha.length} itens prontos.`);
         res.json({ sucesso: true, total: novosItens.length, memoriaTotal: bancoDadosPlanilha.length });
