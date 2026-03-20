@@ -341,6 +341,7 @@ async function buscarEstoque(accessToken) {
   return todosProdutos.map(p => ({
     id: p.id,
     codigo: p.codigo,
+    gtin: p.gtin || '',
     descricao: p.nome,
     saldoFisicoTotal: mapaSaldos.get(p.id)?.saldoFisicoTotal ?? 0
   }));
@@ -1092,17 +1093,46 @@ app.get('/api/wms/produto/:codigo', async (req, res) => {
   try {
     const codigoBipado = req.params.codigo;
     const token = await obterAccessToken();
-    const urlBusca = `https://www.bling.com.br/Api/v3/produtos?codigo=${codigoBipado}`;
-    const respBusca = await axios.get(urlBusca, { headers: { Authorization: `Bearer ${token}` } });
-    
-    if (!respBusca.data || !respBusca.data.data || respBusca.data.data.length === 0) {
+    let produto = null;
+
+    // 1️⃣ Busca por código (SKU) no Bling
+    try {
+      const respCodigo = await axios.get(`https://www.bling.com.br/Api/v3/produtos?codigo=${encodeURIComponent(codigoBipado)}`, { headers: { Authorization: `Bearer ${token}` } });
+      if (respCodigo.data?.data?.length > 0) produto = respCodigo.data.data[0];
+    } catch (e) {}
+
+    // 2️⃣ Se não achou, busca por GTIN (código de barras / EAN)
+    if (!produto) {
+      try {
+        const respGtin = await axios.get(`https://www.bling.com.br/Api/v3/produtos?gtin=${encodeURIComponent(codigoBipado)}`, { headers: { Authorization: `Bearer ${token}` } });
+        if (respGtin.data?.data?.length > 0) produto = respGtin.data.data[0];
+      } catch (e) {}
+    }
+
+    // 3️⃣ Se não achou no Bling, tenta o cache local (match por codigo ou gtin)
+    if (!produto && cacheProdutos) {
+      const termoLower = codigoBipado.toLowerCase();
+      const cacheMatch = cacheProdutos.find(p =>
+        String(p.codigo).toLowerCase() === termoLower ||
+        String(p.gtin || '').toLowerCase() === termoLower
+      );
+      if (cacheMatch) {
+        return res.json({ id: cacheMatch.id, codigo: cacheMatch.codigo, nome: cacheMatch.descricao, estoqueAtual: cacheMatch.saldoFisicoTotal || 0, fotoUrl: "" });
+      }
+    }
+
+    if (!produto) {
       return res.status(404).json({ erro: 'Produto não encontrado' });
     }
-    const produto = respBusca.data.data[0];
-    const urlEstoque = `https://www.bling.com.br/Api/v3/estoques/saldos?idsProdutos[]=${produto.id}`;
-    const respEstoque = await axios.get(urlEstoque, { headers: { Authorization: `Bearer ${token}` } });
-    let estoqueAtual = respEstoque.data?.data?.[0]?.saldoFisicoTotal || 0;
-    res.json({ id: produto.id, codigo: codigoBipado, nome: produto.nome, estoqueAtual: estoqueAtual, fotoUrl: produto.imagemURL || "" });
+
+    // Busca saldo de estoque
+    let estoqueAtual = 0;
+    try {
+      const respEstoque = await axios.get(`https://www.bling.com.br/Api/v3/estoques/saldos?idsProdutos[]=${produto.id}`, { headers: { Authorization: `Bearer ${token}` } });
+      estoqueAtual = respEstoque.data?.data?.[0]?.saldoFisicoTotal || 0;
+    } catch (e) {}
+
+    res.json({ id: produto.id, codigo: produto.codigo || codigoBipado, gtin: produto.gtin || '', nome: produto.nome, estoqueAtual, fotoUrl: produto.imagemURL || "" });
   } catch (error) {
     res.status(500).json({ erro: 'Erro interno' });
   }

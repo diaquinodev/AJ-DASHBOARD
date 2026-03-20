@@ -73,7 +73,7 @@
             <div class="w-full max-w-2xl mt-4 mb-8 relative z-20">
                 <div class="relative">
                     <i data-lucide="search" class="absolute left-4 top-4 text-slate-400 w-6 h-6"></i>
-                    <input type="text" id="busca-manual" oninput="filtrarCatalogo()" placeholder="Bipe ou digite o SKU/Nome..." class="w-full pl-12 pr-4 py-4 bg-white border-2 border-slate-200 rounded-2xl text-lg font-medium text-slate-700 outline-none transition-all shadow-sm focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100">
+                    <input type="text" id="busca-manual" oninput="filtrarCatalogo()" onkeydown="if(event.key==='Enter'){event.preventDefault(); buscarViaInput();}" placeholder="Bipe ou digite o SKU/Nome..." class="w-full pl-12 pr-4 py-4 bg-white border-2 border-slate-200 rounded-2xl text-lg font-medium text-slate-700 outline-none transition-all shadow-sm focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100">
                 </div>
                 <ul id="resultado-busca" class="absolute w-full bg-white border border-slate-200 rounded-xl shadow-2xl mt-2 max-h-64 overflow-y-auto hidden z-30"></ul>
             </div>
@@ -279,8 +279,12 @@
         function processarBipe(codigo) {
             const termoSeguro = String(codigo).toLowerCase().trim();
 
-            const itemExistente = loteDeEntrada.find(i => String(i.codigo).toLowerCase() === termoSeguro);
-            
+            // Checa se já está no lote (por codigo OU gtin)
+            const itemExistente = loteDeEntrada.find(i =>
+                String(i.codigo).toLowerCase() === termoSeguro ||
+                (i.gtin && String(i.gtin).toLowerCase() === termoSeguro)
+            );
+
             if (itemExistente) {
                 itemExistente.quantidade++;
                 tocarSucesso();
@@ -289,12 +293,23 @@
                 return;
             }
 
-            const matchExato = catalogoBling.find(p => String(p.codigo).toLowerCase() === termoSeguro);
+            // Match exato por codigo OU gtin no catálogo local
+            const matchExato = catalogoBling.find(p =>
+                String(p.codigo).toLowerCase() === termoSeguro ||
+                (p.gtin && String(p.gtin).toLowerCase() === termoSeguro)
+            );
 
             if (matchExato) {
                 buscarNaAPI(matchExato.codigo);
             } else {
-                // Se digitou número, prioriza referência no nome (ex: "31-CONJUNTO...")
+                // Detecta se é código de barras longo (GTIN/EAN) — manda direto pra API
+                const isBarcode = /^\d{8,}$/.test(termoSeguro);
+                if (isBarcode) {
+                    buscarNaAPI(codigo);
+                    return;
+                }
+
+                // Se digitou número curto, prioriza referência no nome (ex: "31-CONJUNTO...")
                 let parciais;
                 const isNum = /^\d+$/.test(termoSeguro);
                 if (isNum) {
@@ -308,15 +323,15 @@
                 } else {
                     parciais = catalogoBling.filter(p => String(p.codigo).toLowerCase().includes(termoSeguro) || String(p.descricao).toLowerCase().includes(termoSeguro));
                 }
-                
+
                 if (parciais.length === 1) {
                     buscarNaAPI(parciais[0].codigo);
                 } else if (parciais.length > 1) {
                     tocarErro();
                     const barraBusca = document.getElementById('busca-manual');
                     barraBusca.value = codigo;
-                    filtrarCatalogo(); 
-                    barraBusca.focus(); 
+                    filtrarCatalogo();
+                    barraBusca.focus();
                     alert(`⚠️ Múltiplas variações encontradas para "${codigo}".\nPor favor, escolha a peça correta clicando na lista.`);
                 } else {
                     buscarNaAPI(codigo);
@@ -339,6 +354,7 @@
                     const novoItem = {
                         id: data.id,
                         codigo: data.codigo,
+                        gtin: data.gtin || '',
                         nome: data.nome,
                         fotoUrl: data.fotoUrl,
                         quantidade: 1
@@ -537,9 +553,17 @@
 
             // Busca inteligente: prioriza referência no início do nome (ex: "31-CONJUNTO...")
             const isNumero = /^\d+$/.test(termo);
+            const isBarcode = /^\d{8,}$/.test(termo);
             let filtrados;
-            if (isNumero) {
-                // Se digitou só número, busca pela referência no início do nome (ex: "31-" ou "31 -")
+
+            if (isBarcode) {
+                // Código de barras longo — busca por GTIN ou codigo
+                filtrados = catalogoBling.filter(p =>
+                    String(p.gtin || '').toLowerCase().includes(termo) ||
+                    String(p.codigo).toLowerCase().includes(termo)
+                ).slice(0, 50);
+            } else if (isNumero) {
+                // Se digitou só número curto, busca pela referência no início do nome
                 const exatos = catalogoBling.filter(p => {
                     const desc = String(p.descricao).toLowerCase();
                     return desc.startsWith(termo + '-') || desc.startsWith(termo + ' -') || desc.startsWith(termo + ' ');
@@ -547,11 +571,14 @@
                 if (exatos.length > 0) {
                     filtrados = exatos.slice(0, 50);
                 } else {
-                    // Fallback: busca normal
                     filtrados = catalogoBling.filter(p => String(p.descricao).toLowerCase().includes(termo)).slice(0, 50);
                 }
             } else {
-                filtrados = catalogoBling.filter(p => String(p.codigo).toLowerCase().includes(termo) || String(p.descricao).toLowerCase().includes(termo)).slice(0, 50);
+                filtrados = catalogoBling.filter(p =>
+                    String(p.codigo).toLowerCase().includes(termo) ||
+                    String(p.descricao).toLowerCase().includes(termo) ||
+                    String(p.gtin || '').toLowerCase().includes(termo)
+                ).slice(0, 50);
             }
 
             if (filtrados.length === 0) {
@@ -570,6 +597,15 @@
                 });
             }
             lista.classList.remove('hidden');
+        }
+
+        function buscarViaInput() {
+            const termo = document.getElementById('busca-manual').value.trim();
+            if (termo.length < 2) return;
+            document.getElementById('resultado-busca').classList.add('hidden');
+            document.getElementById('busca-manual').value = '';
+            document.getElementById('busca-manual').blur();
+            processarBipe(termo);
         }
 
         function selecionarBuscaManual(codigo) {
