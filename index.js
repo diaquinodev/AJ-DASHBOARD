@@ -47,6 +47,9 @@ let cacheProdutos = null;
 let ultimoCacheHora = 0;
 let cachePedidosRecentes = [];
 
+// 🏢 DEPÓSITO SEDE — Usado para consulta de saldo, entrada e saída
+const DEPOSITO_SEDE_ID = 14887498122;
+
 // 📁 CACHE EM DISCO — Catálogo salvo em arquivo para carregamento instantâneo
 const CATALOGO_CACHE_FILE = path.join(__dirname, "catalogo-cache.json");
 const UPSELLER_CATALOGO_FILE = path.join(__dirname, "upseller-catalogo.json");
@@ -332,10 +335,23 @@ async function buscarEstoque(accessToken) {
 
   console.log(`   [Bling] Concluído! ${saldos.length} saldos carregados.`);
 
+  // Extrai saldo específico do depósito SEDE
   const mapaSaldos = new Map();
   for (const s of saldos) {
     const idProduto = s.produto?.id || s.id;
-    if (idProduto) mapaSaldos.set(idProduto, s);
+    if (!idProduto) continue;
+
+    let saldoSede = 0;
+    // Tenta pegar saldo específico do depósito SEDE
+    if (s.depositos && Array.isArray(s.depositos)) {
+      const depSede = s.depositos.find(d => d.id === DEPOSITO_SEDE_ID);
+      saldoSede = depSede?.saldoFisico ?? depSede?.saldoVirtual ?? 0;
+    }
+    // Fallback: se não tem breakdown por depósito, usa saldoFisicoTotal
+    if (saldoSede === 0 && !s.depositos) {
+      saldoSede = s.saldoFisicoTotal ?? 0;
+    }
+    mapaSaldos.set(idProduto, saldoSede);
   }
 
   return todosProdutos.map(p => ({
@@ -343,7 +359,7 @@ async function buscarEstoque(accessToken) {
     codigo: p.codigo,
     gtin: p.gtin || '',
     descricao: p.nome,
-    saldoFisicoTotal: mapaSaldos.get(p.id)?.saldoFisicoTotal ?? 0
+    saldoFisicoTotal: mapaSaldos.get(p.id) ?? 0
   }));
 }
 
@@ -619,7 +635,7 @@ app.post('/api/checkout/finalizar', async (req, res) => {
             console.log(`✅ [Checkout] Pedido Bling ${numero} marcado como Atendido!`);
             
         } else {
-            const depositoId = 14887498122; 
+            const depositoId = DEPOSITO_SEDE_ID;
             for (const item of itens) {
                 try {
                     const respProd = await axios.get(`https://www.bling.com.br/Api/v3/produtos?codigo=${item.sku}`, { headers: { Authorization: `Bearer ${token}` }});
@@ -1145,11 +1161,17 @@ app.get('/api/wms/produto/:codigo', async (req, res) => {
       return res.status(404).json({ erro: 'Produto não encontrado' });
     }
 
-    // Busca saldo de estoque
+    // Busca saldo de estoque do depósito SEDE
     let estoqueAtual = 0;
     try {
       const respEstoque = await axios.get(`https://www.bling.com.br/Api/v3/estoques/saldos?idsProdutos[]=${produto.id}`, { headers: { Authorization: `Bearer ${token}` } });
-      estoqueAtual = respEstoque.data?.data?.[0]?.saldoFisicoTotal || 0;
+      const saldoData = respEstoque.data?.data?.[0];
+      if (saldoData?.depositos && Array.isArray(saldoData.depositos)) {
+        const depSede = saldoData.depositos.find(d => d.id === DEPOSITO_SEDE_ID);
+        estoqueAtual = depSede?.saldoFisico ?? depSede?.saldoVirtual ?? 0;
+      } else {
+        estoqueAtual = saldoData?.saldoFisicoTotal || 0;
+      }
     } catch (e) {}
 
     res.json({ id: produto.id, codigo: produto.codigo || codigoBipado, gtin: produto.gtin || '', nome: produto.nome, estoqueAtual, fotoUrl: produto.imagemURL || "" });
@@ -1173,7 +1195,7 @@ app.post('/api/wms/entrada', async (req, res) => {
   try {
     const { idProduto, quantidade, operacao } = req.body;
     const token = await obterAccessToken();
-    const depositoId = 14887498122; 
+    const depositoId = DEPOSITO_SEDE_ID;
     const tipoOperacao = operacao === 'S' ? 'S' : 'E';
     await axios.post("https://www.bling.com.br/Api/v3/estoques", {
       produto: { id: parseInt(idProduto) },
