@@ -1049,9 +1049,121 @@ app.get('/api/produtos', async (req, res) => {
   }
 });
 
-// 👇 ROTA DE DISPARO MANUAL — WhatsApp desativado temporariamente
-app.get('/api/disparar-alerta', async (req, res) => {
-    res.json({ sucesso: false, mensagem: "WhatsApp desativado temporariamente." });
+// 📲 ALERTA DE ESTOQUE — Gera mensagem formatada para WhatsApp
+app.get('/api/alerta-estoque', async (req, res) => {
+  try {
+    if (!cacheProdutos || cacheProdutos.length === 0) {
+      return res.status(400).json({ erro: "Catálogo vazio. Aguarde a sincronização." });
+    }
+
+    // Filtra apenas SKUs que existem no catálogo UpSeller (marketplace ativo)
+    const catalogoUpseller = lerCatalogoUpSeller();
+    const skusUpseller = catalogoUpseller?.skus ? new Set(catalogoUpseller.skus.map(s => s.toLowerCase())) : null;
+
+    let produtosAlerta = cacheProdutos.filter(p => {
+      if (p.saldoFisicoTotal > CONFIG.limiteMax) return false;
+      // Ignora refs da blacklist
+      const ref = p.codigo ? p.codigo.split(/[-_]/)[0].replace(/^0+/, '') : '';
+      if (CONFIG.ignorarRefs.includes(ref)) return false;
+      // Se tem catálogo UpSeller, só alerta SKUs que vendem nos marketplaces
+      if (skusUpseller && p.codigo) {
+        if (!skusUpseller.has(p.codigo.toLowerCase())) return false;
+      }
+      return true;
+    });
+
+    const zerados = produtosAlerta.filter(p => p.saldoFisicoTotal === 0);
+    const baixos = produtosAlerta.filter(p => p.saldoFisicoTotal > 0 && p.saldoFisicoTotal <= CONFIG.limiteMax);
+
+    // Agrupa por família (referência = parte antes do primeiro "-")
+    function agruparPorFamilia(lista) {
+      const familias = new Map();
+      for (const p of lista) {
+        const partes = (p.codigo || '').split('-');
+        const ref = partes[0] || 'SEM-REF';
+        // Extrai nome limpo da descrição
+        let nomeLimpo = (p.descricao || '').replace(/^[\d]+\s*[-_]\s*/, '').replace(/COR:\s*[^;]+;?/i, '').replace(/TAM(?:ANHO)?:\s*[^;]+;?/i, '').replace(/;/g, '').replace(/\s{2,}/g, ' ').trim();
+        if (!familias.has(ref)) {
+          familias.set(ref, { ref, nome: nomeLimpo, variantes: [] });
+        }
+        const cor = partes[1] || '-';
+        const tam = partes[2] || '-';
+        familias.get(ref).variantes.push({ cor, tam, estoque: p.saldoFisicoTotal, sku: p.codigo });
+      }
+      return Array.from(familias.values());
+    }
+
+    function formatarFamilia(familia) {
+      const variantes = familia.variantes
+        .map(v => `   ${v.cor}-${v.tam} (${v.estoque} un.)`)
+        .join('\n');
+      return `📦 *${familia.ref} — ${familia.nome}*\n${variantes}`;
+    }
+
+    const MAX_POR_SECAO = 20;
+    const familiasZeradas = agruparPorFamilia(zerados);
+    const familiasBaixas = agruparPorFamilia(baixos);
+
+    const agora = new Date();
+    const dataFormatada = agora.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' });
+    const horaFormatada = agora.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+
+    let msg = '';
+    msg += `━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+    msg += `📊 *ALERTA DE ESTOQUE*\n`;
+    msg += `📅 ${dataFormatada} às ${horaFormatada}\n`;
+    msg += `━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
+    msg += `📋 *Resumo:*\n`;
+    msg += `   🛑 ${zerados.length} produto${zerados.length !== 1 ? 's' : ''} zerado${zerados.length !== 1 ? 's' : ''}\n`;
+    msg += `   🟡 ${baixos.length} produto${baixos.length !== 1 ? 's' : ''} com estoque baixo\n\n`;
+
+    // SEÇÃO ZERADOS
+    if (familiasZeradas.length > 0) {
+      msg += `🛑 *ESTOQUE ZERADO — PRIORIDADE*\n`;
+      msg += `─────────────────────────\n`;
+      const exibir = familiasZeradas.slice(0, MAX_POR_SECAO);
+      msg += exibir.map(f => formatarFamilia(f)).join('\n\n');
+      if (familiasZeradas.length > MAX_POR_SECAO) {
+        msg += `\n\n   _...e mais ${familiasZeradas.length - MAX_POR_SECAO} família(s) zerada(s)_`;
+      }
+      msg += `\n\n`;
+    }
+
+    // SEÇÃO BAIXOS
+    if (familiasBaixas.length > 0) {
+      msg += `🟡 *ESTOQUE BAIXO (1-${CONFIG.limiteMax} un.)*\n`;
+      msg += `─────────────────────────\n`;
+      const exibir = familiasBaixas.slice(0, MAX_POR_SECAO);
+      msg += exibir.map(f => formatarFamilia(f)).join('\n\n');
+      if (familiasBaixas.length > MAX_POR_SECAO) {
+        msg += `\n\n   _...e mais ${familiasBaixas.length - MAX_POR_SECAO} família(s) com estoque baixo_`;
+      }
+      msg += `\n\n`;
+    }
+
+    if (zerados.length === 0 && baixos.length === 0) {
+      msg += `✅ *Nenhum produto em alerta!* Estoque saudável.\n\n`;
+    }
+
+    msg += `━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+    msg += `🕐 Última sync: ${ultimoCacheHora ? new Date(ultimoCacheHora).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : 'N/A'}\n`;
+    msg += `📦 Total monitorado: ${cacheProdutos.length} SKUs\n`;
+    if (skusUpseller) msg += `🏪 Filtro: Apenas marketplace (${skusUpseller.size} SKUs ativos)\n`;
+    msg += `━━━━━━━━━━━━━━━━━━━━━━━━━`;
+
+    const whatsappUrl = `https://api.whatsapp.com/send?text=${encodeURIComponent(msg)}`;
+
+    res.json({
+      sucesso: true,
+      mensagem: msg,
+      whatsappUrl,
+      resumo: { zerados: zerados.length, baixos: baixos.length, total: produtosAlerta.length }
+    });
+
+  } catch (e) {
+    console.error("❌ [Alerta] Erro ao gerar alerta:", e.message);
+    res.status(500).json({ erro: "Erro ao gerar alerta de estoque." });
+  }
 });
 
 // 📦 ROTA CACHE — Retorna catálogo instantaneamente do cache

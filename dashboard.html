@@ -187,14 +187,32 @@
 
         async function dispararAlertaManual() {
             const btn = document.getElementById('btnAlerta');
-            btn.innerHTML = `<i data-lucide="loader-2" class="w-5 h-5 animate-spin"></i> Preparando envio...`;
+            btn.innerHTML = `<i data-lucide="loader-2" class="w-5 h-5 animate-spin"></i> Gerando alerta...`;
             btn.classList.replace('bg-rose-600', 'bg-slate-400');
             btn.disabled = true;
             lucide.createIcons();
 
             try {
-                await fetch('/api/disparar-alerta');
-                alert("🚨 Ordem enviada! O Robô vai varrer o estoque e mandar no WhatsApp em alguns instantes.");
+                const resp = await fetch('/api/alerta-estoque');
+                const data = await resp.json();
+
+                if (!data.sucesso) {
+                    alert(`⚠️ ${data.erro || 'Erro ao gerar alerta.'}`);
+                    return;
+                }
+
+                // Mostra preview antes de enviar
+                const resumo = data.resumo;
+                const confirmar = confirm(
+                    `📊 Alerta de Estoque pronto!\n\n` +
+                    `🛑 ${resumo.zerados} zerados\n` +
+                    `🟡 ${resumo.baixos} com estoque baixo\n\n` +
+                    `Abrir WhatsApp para enviar?`
+                );
+
+                if (confirmar) {
+                    window.open(data.whatsappUrl, '_blank');
+                }
             } catch (e) {
                 alert("❌ Erro ao comunicar. O terminal 'node index.js' está rodando?");
             } finally {
