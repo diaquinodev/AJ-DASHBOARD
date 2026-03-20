@@ -1158,6 +1158,17 @@ app.get('/api/wms/produto/:codigo', async (req, res) => {
   }
 });
 
+// Rota para listar depósitos do Bling
+app.get('/api/debug-depositos', async (req, res) => {
+  try {
+    const token = await obterAccessToken();
+    const resp = await axios.get('https://www.bling.com.br/Api/v3/depositos', { headers: { Authorization: `Bearer ${token}` } });
+    res.json(resp.data);
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
+});
+
 app.post('/api/wms/entrada', async (req, res) => {
   try {
     const { idProduto, quantidade, operacao } = req.body;
