@@ -1160,6 +1160,31 @@ app.listen(3000, "0.0.0.0", () => {
   console.log("   ⚠️  Passe esses links acima para seus colaboradores!");
   console.log("======================================================");
 
+  // Detecta ngrok automaticamente e exibe links externos
+  setTimeout(async () => {
+    try {
+      const resp = await fetch("http://127.0.0.1:4040/api/tunnels");
+      const data = await resp.json();
+      const tunnel = data.tunnels.find(t => t.proto === "https") || data.tunnels[0];
+      if (tunnel) {
+        const url = tunnel.public_url;
+        console.log("");
+        console.log("======================================================");
+        console.log("   🌍 NGROK DETECTADO — LINKS EXTERNOS:");
+        console.log("======================================================");
+        console.log("");
+        console.log(`   🌐 Dashboard: ${url}/dashboard.html`);
+        console.log(`   📦 WMS:       ${url}/wms.html`);
+        console.log(`   🛒 Checkout:  ${url}/checkout.html`);
+        console.log("");
+        console.log("   📋 Copie e envie para a equipe!");
+        console.log("======================================================");
+      }
+    } catch {
+      // ngrok não está rodando, sem problema
+    }
+  }, 2000);
+
   // 🔄 Sincroniza catálogo com Bling 5 segundos após iniciar
   setTimeout(() => {
     console.log("\n   [Auto-Sync] Atualizando catálogo em segundo plano...");
