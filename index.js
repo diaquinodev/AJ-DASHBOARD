@@ -453,8 +453,20 @@ app.post('/api/checkout/upload-csv', upload.single('arquivo'), async (req, res) 
                 if (isNaN(qtd) || qtd <= 0) qtd = 1; 
 
                 return { pedido, sku, nome, qtd };
-            }).filter(item => item.pedido !== "" && item.sku !== "" && item.sku !== "undefined"); 
+            }).filter(item => item.pedido !== "" && item.sku !== "" && item.sku !== "undefined");
         }
+
+        // 🔄 Agrupa itens duplicados (mesmo pedido + sku) somando quantidades
+        const mapaAgrupado = new Map();
+        for (const item of novosItens) {
+            const chave = `${item.pedido}|||${item.sku}`;
+            if (mapaAgrupado.has(chave)) {
+                mapaAgrupado.get(chave).qtd += item.qtd;
+            } else {
+                mapaAgrupado.set(chave, { ...item });
+            }
+        }
+        novosItens = Array.from(mapaAgrupado.values());
 
         bancoDadosPlanilha = [...bancoDadosPlanilha, ...novosItens];
 
@@ -509,11 +521,19 @@ app.get('/api/checkout/pedido/:numero', async (req, res) => {
     const numero = req.params.numero.trim();
     console.log(`\n🔍 [Checkout] Solicitada busca pelo pedido: ${numero}`);
     
-    // 1. Tenta achar na Planilha 
+    // 1. Tenta achar na Planilha (agrupa duplicados por SKU)
     const itensCSV = bancoDadosPlanilha.filter(i => i.pedido === numero);
     if (itensCSV.length > 0) {
         console.log(`✅ [Checkout] Pedido ${numero} encontrado na Planilha!`);
-        return res.json({ origem: 'PLANILHA', numero: numero, itens: itensCSV.map(i => ({ sku: i.sku, nome: i.nome, esperado: i.qtd, conferido: 0 })) });
+        const mapaItens = new Map();
+        for (const i of itensCSV) {
+            if (mapaItens.has(i.sku)) {
+                mapaItens.get(i.sku).esperado += i.qtd;
+            } else {
+                mapaItens.set(i.sku, { sku: i.sku, nome: i.nome, esperado: i.qtd, conferido: 0 });
+            }
+        }
+        return res.json({ origem: 'PLANILHA', numero: numero, itens: Array.from(mapaItens.values()) });
     }
 
     try {
