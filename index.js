@@ -915,7 +915,7 @@ app.get('/api/exportar-upseller', async (req, res) => {
     req.setTimeout(120000);
     res.setTimeout(120000);
     try {
-        console.log(`\n📦 [UpSeller] Gerando ZIP (regra: ≥9un = 2000+real, <9un = 0)...`);
+        console.log(`\n📦 [UpSeller] Gerando ZIP (regra: >10un = 2000+real, ≤10un = 0)...`);
 
         // Usa cache se disponível, senão busca do Bling
         let produtos;
@@ -939,7 +939,7 @@ app.get('/api/exportar-upseller', async (req, res) => {
         let logConteudo = `====================================================\n`;
         logConteudo += `📊 RELATÓRIO DE EXPORTAÇÃO UPSELLER (ESTOQUE ESPELHO)\n`;
         logConteudo += `Data: ${new Date().toLocaleString('pt-BR')}\n`;
-        logConteudo += `Regra: Estoque real ≥ 9 → envia 2000 + real | Estoque < 9 → envia 0\n`;
+        logConteudo += `Regra: Estoque real > 10 → envia 2000 + real | Estoque ≤ 10 → envia 0\n`;
         logConteudo += `====================================================\n\n`;
 
         let qtdAtivo = 0;
@@ -990,13 +990,13 @@ app.get('/api/exportar-upseller', async (req, res) => {
                 const quantidadeReal = parseInt(produtoBling.saldoFisicoTotal) || 0;
                 let quantidadeUpSeller = 0;
 
-                if (quantidadeReal >= 9) {
+                if (quantidadeReal > 10) {
                     quantidadeUpSeller = 2000 + quantidadeReal;
                     qtdAtivo++;
                     logConteudo += `[ATIVO] ${skuReal} — real: ${quantidadeReal} → ${quantidadeUpSeller}\n`;
                 } else {
                     qtdZerado++;
-                    logConteudo += `[ZERADO] ${skuReal} — real: ${quantidadeReal} (<9)\n`;
+                    logConteudo += `[ZERADO] ${skuReal} — real: ${quantidadeReal} (≤10)\n`;
                 }
 
                 dadosPlanilha.push([skuReal, "", quantidadeUpSeller, ""]);
@@ -1021,7 +1021,7 @@ app.get('/api/exportar-upseller', async (req, res) => {
                 const quantidadeReal = parseInt(p.saldoFisicoTotal) || 0;
                 let quantidadeUpSeller = 0;
 
-                if (quantidadeReal >= 9) {
+                if (quantidadeReal > 10) {
                     quantidadeUpSeller = 2000 + quantidadeReal;
                     qtdAtivo++;
                 } else {
@@ -1036,8 +1036,8 @@ app.get('/api/exportar-upseller', async (req, res) => {
 
         logConteudo += `\n====================================================\n`;
         logConteudo += `RESUMO:\n`;
-        logConteudo += `- SKUs ATIVOS (estoque ≥9, enviado 2000+real): ${qtdAtivo}\n`;
-        logConteudo += `- SKUs ZERADOS (estoque <9, enviado 0): ${qtdZerado}\n`;
+        logConteudo += `- SKUs ATIVOS (estoque >10, enviado 2000+real): ${qtdAtivo}\n`;
+        logConteudo += `- SKUs ZERADOS (estoque ≤10, enviado 0): ${qtdZerado}\n`;
         if (qtdSemMatch > 0) logConteudo += `- SKUs SEM MATCH no Bling (não exportados): ${qtdSemMatch}\n`;
         logConteudo += `- Ignorados: ${qtdIgnorados}\n`;
         logConteudo += `- Total de linhas na planilha: ${totalExportados}\n`;
