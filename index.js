@@ -84,7 +84,7 @@ function normalizarChaveMatch(ref, cor, tam) {
   const refNorm = String(parseInt(ref) || ref).trim();
   const corNorm = removerAcentos(cor.toLowerCase())
     .replace(/\s+/g, ' ')
-    .replace(/\bbb\b/g, 'bb')
+    .replace(/\bbebe\b/g, 'bb') // normaliza "bebê"/"bebe" → "bb"
     .replace(/\brc\b/g, '')   // remove sufixo RC
     .replace(/\brg\b/g, '')   // remove sufixo RG
     .replace(/\bristre?a?\b/g, '')  // remove "risca/ristra"
@@ -157,7 +157,7 @@ function buscarNoMapaBling(mapaBling, ref, cor, tam) {
 
   // 3. Busca parcial - cor do UpSeller contida na cor do Bling ou vice-versa
   const refNorm = String(parseInt(ref) || ref).trim();
-  const corNormBusca = removerAcentos(cor.toLowerCase()).replace(/\s+/g, ' ').trim();
+  const corNormBusca = removerAcentos(cor.toLowerCase()).replace(/\s+/g, ' ').replace(/\bbebe\b/g, 'bb').trim();
   const tamNorm = (tam || '').toUpperCase().trim();
 
   for (const [chave, produto] of mapaBling) {
