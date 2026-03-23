@@ -649,6 +649,14 @@ app.post('/api/checkout/finalizar', async (req, res) => {
             const depositoId = DEPOSITO_SEDE_ID;
             let baixasOk = 0;
             let baixasFalha = 0;
+
+            // Constrói mapa de matching Bling usando o cache (mesmo sistema da exportação UpSeller)
+            let mapaBling = null;
+            if (cacheProdutos && cacheProdutos.length > 0) {
+                mapaBling = construirMapaBling(cacheProdutos);
+                console.log(`   [Checkout] Mapa Bling construído: ${mapaBling.size} variações para matching`);
+            }
+
             for (const item of itens) {
                 try {
                     let prodId = null;
@@ -662,33 +670,43 @@ app.post('/api/checkout/finalizar', async (req, res) => {
                         }
                     } catch (e) {}
 
-                    // 2️⃣ Se não achou, busca no cache convertendo nome Bling → SKU UpSeller
-                    if (!prodId && cacheProdutos && cacheProdutos.length > 0) {
-                        const skuBuscado = item.sku.trim().toLowerCase();
-                        const match = cacheProdutos.find(p => {
-                            const skuConvertido = blingParaSkuUpSeller(p.descricao);
-                            return skuConvertido && skuConvertido.toLowerCase() === skuBuscado;
-                        });
-                        if (match) {
-                            prodId = match.id;
-                            console.log(`   ✅ SKU "${item.sku}" encontrado via conversão Bling→UpSeller (ID: ${prodId}, Bling: "${match.descricao}")`);
+                    // 2️⃣ Se não achou, usa o sistema de matching robusto (mesmo da exportação UpSeller)
+                    if (!prodId && mapaBling) {
+                        const parsed = parseUpSellerSku(item.sku);
+                        if (parsed) {
+                            const produtoBling = buscarNoMapaBling(mapaBling, parsed.ref, parsed.cor, parsed.tam);
+                            if (produtoBling) {
+                                prodId = produtoBling.id;
+                                console.log(`   ✅ SKU "${item.sku}" encontrado via matching inteligente (ID: ${prodId}, Bling: "${produtoBling.descricao}")`);
+                            } else {
+                                console.log(`   ⚠️ SKU "${item.sku}" parseado como ref=${parsed.ref} cor=${parsed.cor} tam=${parsed.tam} — sem match no mapa Bling`);
+                            }
+                        } else {
+                            console.log(`   ⚠️ SKU "${item.sku}" não é formato UpSeller válido (não foi possível parsear)`);
                         }
                     }
 
-                    // 3️⃣ Se ainda não achou, tenta buscar pela referência (número inicial do SKU)
+                    // 3️⃣ Último recurso: busca pela referência numérica na API Bling
                     if (!prodId) {
                         const parsed = parseUpSellerSku(item.sku);
                         if (parsed && parsed.ref) {
                             try {
                                 const respRef = await axios.get(`https://www.bling.com.br/Api/v3/produtos?codigo=${encodeURIComponent(parsed.ref)}`, { headers: { Authorization: `Bearer ${token}` }});
                                 const produtos = respRef.data?.data || [];
-                                // Filtra pelo produto que tem a cor e tamanho corretos no nome
                                 for (const p of produtos) {
-                                    const skuConvertido = blingParaSkuUpSeller(p.nome);
-                                    if (skuConvertido && skuConvertido.toLowerCase() === item.sku.trim().toLowerCase()) {
-                                        prodId = p.id;
-                                        console.log(`   ✅ SKU "${item.sku}" encontrado via busca por ref "${parsed.ref}" (ID: ${prodId})`);
-                                        break;
+                                    // Extrai cor e tamanho do nome Bling e compara com normalização
+                                    const matchCor = p.nome?.match(/\bCOR[:\s]+([^,;]+)/i);
+                                    const matchTam = p.nome?.match(/\bTAMANHO[:\s]+([^,;\s]+)/i);
+                                    if (matchCor) {
+                                        const corBling = matchCor[1].trim();
+                                        const tamBling = matchTam ? matchTam[1].trim() : '';
+                                        const chaveBling = normalizarChaveMatch(parsed.ref, corBling, tamBling);
+                                        const chaveUpSeller = normalizarChaveMatch(parsed.ref, parsed.cor, parsed.tam);
+                                        if (chaveBling === chaveUpSeller) {
+                                            prodId = p.id;
+                                            console.log(`   ✅ SKU "${item.sku}" encontrado via busca por ref "${parsed.ref}" (ID: ${prodId})`);
+                                            break;
+                                        }
                                     }
                                 }
                             } catch (e) {}
@@ -704,7 +722,7 @@ app.post('/api/checkout/finalizar', async (req, res) => {
                             observacoes: `Baixa via Checkout de Expedição. Pedido: ${numero}`
                         }, { headers: { Authorization: `Bearer ${token}` } });
                         baixasOk++;
-                        console.log(`   📦 Saída registrada: ${item.esperado}x "${item.sku}" (Pedido ${numero})`);
+                        console.log(`   📦 Saída registrada: ${item.esperado}x "${item.sku}" no depósito SEDE (Pedido ${numero})`);
                     } else {
                         baixasFalha++;
                         console.error(`   ❌ SKU "${item.sku}" NÃO encontrado na Bling! Saída NÃO registrada.`);
@@ -715,6 +733,9 @@ app.post('/api/checkout/finalizar', async (req, res) => {
                 }
             }
             console.log(`✅ [Checkout] Pedido Planilha/UpSeller ${numero} finalizado. Baixas OK: ${baixasOk} | Falhas: ${baixasFalha}`);
+            if (baixasFalha > 0) {
+                return res.json({ sucesso: true, aviso: `${baixasFalha} SKU(s) não encontrado(s) na Bling. Verifique o log do servidor.` });
+            }
         }
         res.json({ sucesso: true });
     } catch (e) {
