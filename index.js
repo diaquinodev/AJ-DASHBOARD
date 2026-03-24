@@ -120,6 +120,7 @@ function parseUpSellerSku(sku) {
 }
 
 // Constrói mapa de matching: chave normalizada → produto Bling
+// Prioriza variações (tipo V) sobre produtos-pai (tipo P) para evitar estoque agregado
 function construirMapaBling(produtos) {
   const mapa = new Map();
   for (const p of produtos) {
@@ -136,7 +137,14 @@ function construirMapaBling(produtos) {
     const tam = matchTam ? matchTam[1].trim() : '';
 
     const chave = normalizarChaveMatch(ref, cor, tam);
-    if (!mapa.has(chave)) {
+    const existente = mapa.get(chave);
+    if (!existente) {
+      mapa.set(chave, p);
+    } else if (existente.tipo === 'P' && p.tipo !== 'P') {
+      // Sobrescreve produto-pai com variação real (estoque individual, não agregado)
+      mapa.set(chave, p);
+    } else if (existente.tipo === p.tipo && p.codigo && p.codigo.length > (existente.codigo || '').length) {
+      // Mesmo tipo: prefere o produto com código mais específico (SKU de variação)
       mapa.set(chave, p);
     }
   }
@@ -363,6 +371,7 @@ async function buscarEstoque(accessToken) {
     codigo: p.codigo,
     gtin: p.gtin || '',
     descricao: p.nome,
+    tipo: p.tipo || '',
     saldoFisicoTotal: mapaSaldos.get(p.id) ?? 0
   }));
 }
