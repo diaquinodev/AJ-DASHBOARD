@@ -979,8 +979,9 @@ app.get('/api/exportar-upseller', async (req, res) => {
                 if (!produtoBling) {
                     qtdSemMatch++;
                     const chaveDebug = normalizarChaveMatch(parsed.ref, parsed.cor, parsed.tam);
-                    logConteudo += `[SEM MATCH] ${skuReal} → chave: ${chaveDebug}\n`;
-                    // NÃO inclui na planilha — evita criar SKUs fantasma na UpSeller
+                    logConteudo += `[SEM MATCH] ${skuReal} → chave: ${chaveDebug} (enviando 0 para zerar na UpSeller)\n`;
+                    // Envia com quantidade 0 para zerar estoque na UpSeller (evita manter valor antigo/stale)
+                    dadosPlanilha.push([skuReal, "", 0, ""]);
                     continue;
                 }
 
@@ -1035,9 +1036,9 @@ app.get('/api/exportar-upseller', async (req, res) => {
         logConteudo += `RESUMO:\n`;
         logConteudo += `- SKUs ATIVOS (estoque >10, enviado 2000+real): ${qtdAtivo}\n`;
         logConteudo += `- SKUs ZERADOS (estoque ≤10, enviado 0): ${qtdZerado}\n`;
-        if (qtdSemMatch > 0) logConteudo += `- SKUs SEM MATCH no Bling (não exportados): ${qtdSemMatch}\n`;
+        if (qtdSemMatch > 0) logConteudo += `- SKUs SEM MATCH no Bling (zerados na UpSeller): ${qtdSemMatch}\n`;
         logConteudo += `- Ignorados: ${qtdIgnorados}\n`;
-        logConteudo += `- Total de linhas na planilha: ${totalExportados}\n`;
+        logConteudo += `- Total de linhas na planilha: ${totalExportados + qtdSemMatch}\n`;
         logConteudo += `====================================================\n`;
 
         console.log(`   [UpSeller] ${totalExportados} SKUs convertidos. ${qtdIgnorados} produtos-pai ignorados.`);
