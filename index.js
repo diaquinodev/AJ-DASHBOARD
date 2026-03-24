@@ -133,7 +133,7 @@ function construirMapaBling(produtos) {
     if (!matchCor) continue;
     const cor = matchCor[1].trim();
 
-    const matchTam = p.descricao.match(/\bTAMANHO[:\s]+([^,;\s]+)/i);
+    const matchTam = p.descricao.match(/\bTAM(?:ANHO)?[:\s]+([^,;\s]+)/i);
     const tam = matchTam ? matchTam[1].trim() : '';
 
     const chave = normalizarChaveMatch(ref, cor, tam);
@@ -709,7 +709,7 @@ app.post('/api/checkout/finalizar', async (req, res) => {
                                 for (const p of produtos) {
                                     // Extrai cor e tamanho do nome Bling e compara com normalização
                                     const matchCor = p.nome?.match(/\bCOR[:\s]+([^,;]+)/i);
-                                    const matchTam = p.nome?.match(/\bTAMANHO[:\s]+([^,;\s]+)/i);
+                                    const matchTam = p.nome?.match(/\bTAM(?:ANHO)?[:\s]+([^,;\s]+)/i);
                                     if (matchCor) {
                                         const corBling = matchCor[1].trim();
                                         const tamBling = matchTam ? matchTam[1].trim() : '';
@@ -778,7 +778,7 @@ function blingParaSkuUpSeller(nomeBling) {
     let cor = matchCor[1].trim();
 
     // 3. Extrai o TAMANHO (aceita "TAMANHO:", "TAMANHO ")
-    const matchTam = nomeBling.match(/\bTAMANHO[:\s]+([^,;\s]+)/i);
+    const matchTam = nomeBling.match(/\bTAM(?:ANHO)?[:\s]+([^,;\s]+)/i);
     let tam = matchTam ? matchTam[1].trim().toUpperCase() : null;
 
     // 4. Converte cor para Title Case (tratando acentos corretamente)
