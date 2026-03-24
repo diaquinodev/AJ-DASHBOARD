@@ -615,7 +615,8 @@ app.get('/api/checkout/pedido/:numero', async (req, res) => {
             sku: i.codigo || i.produto?.codigo || "S/COD",
             nome: i.descricao || "Produto Sem Nome",
             esperado: Math.round(i.quantidade),
-            conferido: 0
+            conferido: 0,
+            produtoId: i.produto?.id || null
         }));
 
         console.log(`✅ [Checkout] Sucesso!`);
@@ -628,22 +629,70 @@ app.get('/api/checkout/pedido/:numero', async (req, res) => {
 
 // 👇 ROTA DE FINALIZAR PEDIDO 👇
 app.post('/api/checkout/finalizar', async (req, res) => {
-    const { origem, id, itens, numero } = req.body;
+    const { origem, id, itens, numero, trocas } = req.body;
     try {
         const token = await obterAccessToken();
+        const depositoId = DEPOSITO_SEDE_ID;
+
+        // ── Processar trocas de itens (funciona para BLING e PLANILHA) ──
+        if (trocas && trocas.length > 0) {
+            console.log(`\n🔄 [Checkout] Processando ${trocas.length} troca(s) no pedido ${numero}...`);
+            for (const troca of trocas) {
+                // Resolver ID do produto original se não veio do frontend (PLANILHA)
+                if (!troca.originalProdutoId && troca.originalSku) {
+                    try {
+                        const respBusca = await axios.get(`https://www.bling.com.br/Api/v3/produtos?codigo=${encodeURIComponent(troca.originalSku)}`, { headers: { Authorization: `Bearer ${token}` }});
+                        if (respBusca.data?.data?.length > 0) {
+                            troca.originalProdutoId = respBusca.data.data[0].id;
+                            console.log(`   🔍 Resolvido ID do item original "${troca.originalSku}" → ${troca.originalProdutoId}`);
+                        }
+                    } catch (e) {}
+                }
+                // ENTRADA do item removido (devolver ao estoque)
+                if (troca.originalProdutoId) {
+                    try {
+                        await axios.post("https://www.bling.com.br/Api/v3/estoques", {
+                            produto: { id: troca.originalProdutoId },
+                            deposito: { id: depositoId },
+                            operacao: "E",
+                            quantidade: troca.quantidade || 1,
+                            observacoes: `Troca no Checkout - ENTRADA (item devolvido). Pedido: ${numero}`
+                        }, { headers: { Authorization: `Bearer ${token}` } });
+                        console.log(`   ✅ ENTRADA: ${troca.quantidade || 1}x "${troca.originalNome}" devolvido ao estoque`);
+                    } catch (errEntrada) {
+                        console.error(`   ⚠️ Erro na ENTRADA do item trocado "${troca.originalNome}":`, errEntrada.response?.data || errEntrada.message);
+                    }
+                }
+                // SAÍDA do novo item (retirar do estoque)
+                if (troca.novoProdutoId) {
+                    try {
+                        await axios.post("https://www.bling.com.br/Api/v3/estoques", {
+                            produto: { id: troca.novoProdutoId },
+                            deposito: { id: depositoId },
+                            operacao: "S",
+                            quantidade: troca.quantidade || 1,
+                            observacoes: `Troca no Checkout - SAÍDA (item substituto). Pedido: ${numero}`
+                        }, { headers: { Authorization: `Bearer ${token}` } });
+                        console.log(`   ✅ SAÍDA: ${troca.quantidade || 1}x "${troca.novoNome}" retirado do estoque`);
+                    } catch (errSaida) {
+                        console.error(`   ⚠️ Erro na SAÍDA do novo item "${troca.novoNome}":`, errSaida.response?.data || errSaida.message);
+                    }
+                }
+            }
+        }
 
         if (origem === 'BLING') {
             console.log(`\n⏳ Injetando Vendedor (SITE) e Loja (SEDE) no pedido ${numero}...`);
-            
+
             const respPedido = await axios.get(`https://www.bling.com.br/Api/v3/pedidos/vendas/${id}`, {
                 headers: { Authorization: `Bearer ${token}` }
             });
-            
+
             let dadosPedido = respPedido.data.data;
-            
+
             dadosPedido.loja = { id: 205344151 };       // ID da Loja SEDE
             dadosPedido.vendedor = { id: 15596386514 }; // ID do Vendedor SITE
-            
+
             try {
                 await axios.put(`https://www.bling.com.br/Api/v3/pedidos/vendas/${id}`, dadosPedido, {
                     headers: { Authorization: `Bearer ${token}` }
@@ -657,9 +706,8 @@ app.post('/api/checkout/finalizar', async (req, res) => {
                 headers: { Authorization: `Bearer ${token}` }
             });
             console.log(`✅ [Checkout] Pedido Bling ${numero} marcado como Atendido!`);
-            
+
         } else {
-            const depositoId = DEPOSITO_SEDE_ID;
             let baixasOk = 0;
             let baixasFalha = 0;
 
@@ -1127,6 +1175,38 @@ app.get('/api/produtos', async (req, res) => {
     if (cacheProdutos) return res.json(cacheProdutos);
     res.status(500).json({ error: "Erro ao buscar produtos do Bling: " + error.message });
   }
+});
+
+// 🔍 BUSCA DE PRODUTOS PARA TROCA NO CHECKOUT
+app.get('/api/checkout/buscar-produtos', async (req, res) => {
+    const termo = (req.query.q || '').toLowerCase().trim();
+    if (termo.length < 2) return res.json([]);
+
+    try {
+        // Usa cache se disponível, senão busca
+        if (!cacheProdutos || cacheProdutos.length === 0) {
+            const token = await obterAccessToken();
+            cacheProdutos = await buscarEstoque(token);
+            ultimoCacheHora = Date.now();
+        }
+
+        const resultados = cacheProdutos.filter(p => {
+            if (p.tipo === 'P') return false; // ignora produtos pai
+            const codigo = (p.codigo || '').toLowerCase();
+            const descricao = (p.descricao || '').toLowerCase();
+            return codigo.includes(termo) || descricao.includes(termo);
+        }).slice(0, 20); // máximo 20 resultados
+
+        res.json(resultados.map(p => ({
+            id: p.id,
+            codigo: p.codigo,
+            descricao: p.descricao,
+            saldoFisicoTotal: p.saldoFisicoTotal
+        })));
+    } catch (e) {
+        console.error('Erro na busca de produtos para troca:', e.message);
+        res.json([]);
+    }
 });
 
 // 📲 ALERTA DE ESTOQUE — Gera mensagem formatada para WhatsApp
