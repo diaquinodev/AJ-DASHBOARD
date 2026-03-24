@@ -1251,11 +1251,25 @@ app.get('/api/produtos', async (req, res) => {
 
 // 🔍 DEBUG — Estado do cache de produtos
 app.get('/api/checkout/cache-status', (req, res) => {
+    // Conta tipos de produtos no cache
+    const tipos = {};
+    let amostra = [];
+    if (cacheProdutos && cacheProdutos.length > 0) {
+        for (const p of cacheProdutos) {
+            const t = p.tipo || 'sem_tipo';
+            tipos[t] = (tipos[t] || 0) + 1;
+        }
+        amostra = cacheProdutos.slice(0, 5).map(p => ({
+            id: p.id, codigo: p.codigo, descricao: p.descricao, tipo: p.tipo, gtin: p.gtin
+        }));
+    }
     res.json({
         cacheProdutos: cacheProdutos ? cacheProdutos.length : 0,
         ultimoCacheHora: ultimoCacheHora ? new Date(ultimoCacheHora).toLocaleString('pt-BR') : 'nunca',
         sincronizandoCatalogo,
-        catalogoCacheExiste: fs.existsSync(CATALOGO_CACHE_FILE)
+        catalogoCacheExiste: fs.existsSync(CATALOGO_CACHE_FILE),
+        tipos,
+        amostra
     });
 });
 
@@ -1362,11 +1376,12 @@ app.get('/api/checkout/buscar-produtos', async (req, res) => {
         }
 
         const resultados = cacheProdutos.filter(p => {
-            if (p.tipo === 'P') return false; // ignora produtos pai
+            // Ignora produtos pai que não têm COR no nome (são agregadores sem estoque individual)
+            const desc = (p.descricao || p.nome || '').toLowerCase();
+            if (p.tipo === 'P' && !desc.includes('cor')) return false;
             const codigo = (p.codigo || '').toLowerCase();
-            const descricao = (p.descricao || p.nome || '').toLowerCase();
             const gtin = (p.gtin || '').toLowerCase();
-            return codigo.includes(termo) || descricao.includes(termo) || gtin.includes(termo);
+            return codigo.includes(termo) || desc.includes(termo) || gtin.includes(termo);
         }).slice(0, 20); // máximo 20 resultados
 
         console.log(`   [Busca Troca] Encontrados: ${resultados.length} resultado(s)`);
