@@ -629,7 +629,7 @@ app.get('/api/checkout/pedido/:numero', async (req, res) => {
 
 // 👇 ROTA DE FINALIZAR PEDIDO 👇
 app.post('/api/checkout/finalizar', async (req, res) => {
-    const { origem, id, itens, numero, trocas } = req.body;
+    const { origem, id, itens, numero, trocas, adicionados, removidos } = req.body;
     try {
         const token = await obterAccessToken();
         const depositoId = DEPOSITO_SEDE_ID;
@@ -676,6 +676,57 @@ app.post('/api/checkout/finalizar', async (req, res) => {
                         console.log(`   ✅ SAÍDA: ${troca.quantidade || 1}x "${troca.novoNome}" retirado do estoque`);
                     } catch (errSaida) {
                         console.error(`   ⚠️ Erro na SAÍDA do novo item "${troca.novoNome}":`, errSaida.response?.data || errSaida.message);
+                    }
+                }
+            }
+        }
+
+        // ── Processar itens removidos (ENTRADA no estoque para compensar) ──
+        if (removidos && removidos.length > 0) {
+            console.log(`\n➖ [Checkout] Processando ${removidos.length} item(ns) removido(s) no pedido ${numero}...`);
+            for (const item of removidos) {
+                let prodId = item.produtoId;
+                if (!prodId && item.sku) {
+                    try {
+                        const resp = await axios.get(`https://www.bling.com.br/Api/v3/produtos?codigo=${encodeURIComponent(item.sku)}`, { headers: { Authorization: `Bearer ${token}` }});
+                        if (resp.data?.data?.length > 0) prodId = resp.data.data[0].id;
+                    } catch (e) {}
+                }
+                if (prodId) {
+                    try {
+                        await axios.post("https://www.bling.com.br/Api/v3/estoques", {
+                            produto: { id: prodId },
+                            deposito: { id: depositoId },
+                            operacao: "E",
+                            quantidade: item.quantidade || 1,
+                            observacoes: `Item removido no Checkout - ENTRADA (devolvido ao estoque). Pedido: ${numero}`
+                        }, { headers: { Authorization: `Bearer ${token}` } });
+                        console.log(`   ✅ ENTRADA: ${item.quantidade || 1}x "${item.nome}" devolvido ao estoque (item removido)`);
+                    } catch (err) {
+                        console.error(`   ⚠️ Erro na ENTRADA do item removido "${item.nome}":`, err.response?.data || err.message);
+                    }
+                } else {
+                    console.error(`   ❌ Não foi possível resolver ID do item removido "${item.sku}" para entrada no estoque`);
+                }
+            }
+        }
+
+        // ── Processar itens adicionados (SAÍDA do estoque) ──
+        if (adicionados && adicionados.length > 0) {
+            console.log(`\n➕ [Checkout] Processando ${adicionados.length} item(ns) adicionado(s) no pedido ${numero}...`);
+            for (const item of adicionados) {
+                if (item.produtoId) {
+                    try {
+                        await axios.post("https://www.bling.com.br/Api/v3/estoques", {
+                            produto: { id: item.produtoId },
+                            deposito: { id: depositoId },
+                            operacao: "S",
+                            quantidade: item.quantidade || 1,
+                            observacoes: `Item adicionado no Checkout - SAÍDA. Pedido: ${numero}`
+                        }, { headers: { Authorization: `Bearer ${token}` } });
+                        console.log(`   ✅ SAÍDA: ${item.quantidade || 1}x "${item.nome}" retirado do estoque (item adicionado)`);
+                    } catch (err) {
+                        console.error(`   ⚠️ Erro na SAÍDA do item adicionado "${item.nome}":`, err.response?.data || err.message);
                     }
                 }
             }

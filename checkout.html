@@ -58,6 +58,11 @@
                     </div>
                 </div>
 
+                <div class="flex gap-2 mb-6">
+                    <button onclick="abrirModalAdicionar()" class="flex-1 flex items-center justify-center gap-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 px-3 py-2.5 rounded-xl text-sm font-bold transition-all"><i data-lucide="plus-circle" class="w-4 h-4"></i> Adicionar Item</button>
+                    <button onclick="desfazerUltimaAlteracao()" id="btn-desfazer" class="hidden flex items-center justify-center gap-2 bg-slate-50 hover:bg-slate-100 text-slate-600 border border-slate-200 px-3 py-2.5 rounded-xl text-sm font-bold transition-all"><i data-lucide="undo-2" class="w-4 h-4"></i> Desfazer</button>
+                </div>
+
                 <div class="mt-auto bg-slate-50 p-6 rounded-2xl border border-slate-200">
                     <div class="flex justify-between items-center mb-4"><span class="text-sm font-bold text-slate-500">Progresso</span><span id="texto-progresso" class="text-lg font-black text-indigo-600">0 / 0</span></div>
                     <div class="w-full bg-slate-200 rounded-full h-3 overflow-hidden"><div id="barra-progresso" class="bg-indigo-600 h-3 rounded-full transition-all duration-500" style="width: 0%"></div></div>
@@ -88,7 +93,7 @@
         <div class="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[80vh] flex flex-col overflow-hidden">
             <div class="p-6 border-b border-slate-200">
                 <div class="flex justify-between items-center mb-4">
-                    <h3 class="text-xl font-black text-slate-900">Trocar Item do Pedido</h3>
+                    <h3 id="modal-troca-titulo" class="text-xl font-black text-slate-900">Trocar Item do Pedido</h3>
                     <button onclick="fecharModalTroca()" class="text-slate-400 hover:text-slate-600 p-1"><i data-lucide="x" class="w-6 h-6"></i></button>
                 </div>
                 <div id="troca-item-original" class="bg-rose-50 border border-rose-200 rounded-xl p-3 mb-4">
@@ -112,6 +117,7 @@
         let pedidoAtual = null;
         let trocaIndexAtual = null;
         let timerBuscaTroca = null;
+        let modalMode = 'troca'; // 'troca' ou 'adicionar'
 
         window.onload = async () => {
             alterarStatus("Sincronizando Bling...", 'buscando');
@@ -290,10 +296,11 @@
                 }
                 
                 const idx = pedidoAtual.itens.indexOf(item);
-                const trocadoTag = item.trocado ? `<span class="ml-2 text-[10px] font-black text-amber-600 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">TROCADO</span>` : '';
-                const btnTroca = !concluido ? `<button onclick="event.stopPropagation(); trocarItem(${idx})" class="ml-3 bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-200 px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1" title="Trocar este item"><i data-lucide="repeat-2" class="w-3.5 h-3.5"></i> Trocar</button>` : '';
+                const statusTag = item.trocado ? `<span class="ml-2 text-[10px] font-black text-amber-600 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">TROCADO</span>` : item.adicionado ? `<span class="ml-2 text-[10px] font-black text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">ADICIONADO</span>` : '';
+                const btnTroca = !concluido ? `<button onclick="event.stopPropagation(); trocarItem(${idx})" class="bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-200 px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1" title="Trocar este item"><i data-lucide="repeat-2" class="w-3.5 h-3.5"></i> Trocar</button>` : '';
+                const btnRemover = !concluido ? `<button onclick="event.stopPropagation(); removerItem(${idx})" class="bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1" title="Remover este item"><i data-lucide="trash-2" class="w-3.5 h-3.5"></i></button>` : '';
 
-                li.innerHTML = `<div class="flex items-center gap-4 flex-1 overflow-hidden"><i data-lucide="${iconName}" class="w-8 h-8 ${iconeClass} transition-colors"></i><div class="flex-1 min-w-0"><p class="font-black text-lg truncate">${item.nome}${trocadoTag}</p><p class="text-sm font-mono text-slate-500 mt-0.5">SKU: ${item.sku}</p></div></div><div class="flex items-center">${btnTroca}<div class="text-center ml-4 pl-4 border-l"><p class="text-xs font-bold text-slate-400">QTD</p><p class="text-3xl font-black ${concluido ? 'text-emerald-600' : 'text-slate-700'}">${item.conferido} <span class="text-lg text-slate-400">/ ${item.esperado}</span></p></div></div>`;
+                li.innerHTML = `<div class="flex items-center gap-4 flex-1 overflow-hidden"><i data-lucide="${iconName}" class="w-8 h-8 ${iconeClass} transition-colors"></i><div class="flex-1 min-w-0"><p class="font-black text-lg truncate">${item.nome}${statusTag}</p><p class="text-sm font-mono text-slate-500 mt-0.5">SKU: ${item.sku}</p></div></div><div class="flex items-center gap-1.5">${btnTroca}${btnRemover}<div class="text-center ml-3 pl-4 border-l"><p class="text-xs font-bold text-slate-400">QTD</p><p class="text-3xl font-black ${concluido ? 'text-emerald-600' : 'text-slate-700'}">${item.conferido} <span class="text-lg text-slate-400">/ ${item.esperado}</span></p></div></div>`;
                 lista.appendChild(li);
             });
 
@@ -309,12 +316,28 @@
             }
         }
 
-        // ── FUNÇÕES DE TROCA DE ITEM ──
+        // ── FUNÇÕES DE TROCA / ADICIONAR / REMOVER ITEM ──
         function trocarItem(index) {
+            modalMode = 'troca';
             trocaIndexAtual = index;
             const item = pedidoAtual.itens[index];
+            document.getElementById('modal-troca-titulo').textContent = 'Trocar Item do Pedido';
+            document.getElementById('troca-item-original').classList.remove('hidden');
             document.getElementById('troca-nome-original').textContent = item.nome;
             document.getElementById('troca-sku-original').textContent = `SKU: ${item.sku}`;
+            document.getElementById('input-busca-troca').value = '';
+            document.getElementById('lista-busca-troca').innerHTML = '<li class="p-6 text-center text-slate-400 text-sm">Digite para buscar produtos do estoque...</li>';
+            document.getElementById('modal-troca').classList.remove('hidden');
+            lucide.createIcons();
+            setTimeout(() => document.getElementById('input-busca-troca').focus(), 100);
+        }
+
+        function abrirModalAdicionar() {
+            if (!pedidoAtual) return;
+            modalMode = 'adicionar';
+            trocaIndexAtual = null;
+            document.getElementById('modal-troca-titulo').textContent = 'Adicionar Item ao Pedido';
+            document.getElementById('troca-item-original').classList.add('hidden');
             document.getElementById('input-busca-troca').value = '';
             document.getElementById('lista-busca-troca').innerHTML = '<li class="p-6 text-center text-slate-400 text-sm">Digite para buscar produtos do estoque...</li>';
             document.getElementById('modal-troca').classList.remove('hidden');
@@ -346,8 +369,9 @@
                         lista.innerHTML = '<li class="p-6 text-center text-slate-400 text-sm">Nenhum produto encontrado.</li>';
                         return;
                     }
+                    const callbackName = modalMode === 'adicionar' ? 'confirmarAdicao' : 'confirmarTroca';
                     lista.innerHTML = produtos.map(p => `
-                        <li onclick='confirmarTroca(${JSON.stringify(p).replace(/'/g, "&#39;")})' class="p-3 mx-1 mb-1 hover:bg-indigo-50 rounded-xl cursor-pointer flex justify-between items-center group transition-colors border border-transparent hover:border-indigo-200">
+                        <li onclick='${callbackName}(${JSON.stringify(p).replace(/'/g, "&#39;")})' class="p-3 mx-1 mb-1 hover:bg-indigo-50 rounded-xl cursor-pointer flex justify-between items-center group transition-colors border border-transparent hover:border-indigo-200">
                             <div class="flex-1 min-w-0 pr-3">
                                 <p class="font-bold text-sm text-slate-800 truncate">${p.descricao}</p>
                                 <p class="text-xs font-mono text-slate-400 mt-0.5">${p.codigo || 'Sem código'}</p>
@@ -398,10 +422,114 @@
             tocarSucesso();
         }
 
+        function confirmarAdicao(novoProduto) {
+            const qtdStr = prompt(`Quantas unidades de "${novoProduto.descricao}" deseja adicionar?`, '1');
+            if (!qtdStr) return;
+            const qtd = parseInt(qtdStr);
+            if (isNaN(qtd) || qtd < 1) { alert('Quantidade inválida.'); return; }
+
+            if (!pedidoAtual.adicionados) pedidoAtual.adicionados = [];
+
+            pedidoAtual.adicionados.push({
+                codigo: novoProduto.codigo,
+                nome: novoProduto.descricao,
+                produtoId: novoProduto.id,
+                quantidade: qtd
+            });
+
+            pedidoAtual.itens.push({
+                sku: novoProduto.codigo || novoProduto.id,
+                nome: novoProduto.descricao,
+                esperado: qtd,
+                conferido: 0,
+                adicionado: true,
+                produtoId: novoProduto.id
+            });
+
+            fecharModalTroca();
+            atualizarListaInterface();
+            atualizarBtnDesfazer();
+            tocarSucesso();
+        }
+
+        function removerItem(index) {
+            const item = pedidoAtual.itens[index];
+            const confirma = confirm(`Remover "${item.nome}" (${item.esperado}x) do pedido?`);
+            if (!confirma) return;
+
+            if (!pedidoAtual.removidos) pedidoAtual.removidos = [];
+
+            pedidoAtual.removidos.push({
+                sku: item.sku,
+                nome: item.nome,
+                produtoId: item.produtoId || null,
+                quantidade: item.esperado
+            });
+
+            pedidoAtual.itens.splice(index, 1);
+            atualizarListaInterface();
+            atualizarBtnDesfazer();
+            tocarSucesso();
+        }
+
+        function desfazerUltimaAlteracao() {
+            // Desfaz a última operação (troca, adição ou remoção)
+            const trocas = pedidoAtual.trocas || [];
+            const adicionados = pedidoAtual.adicionados || [];
+            const removidos = pedidoAtual.removidos || [];
+
+            if (trocas.length === 0 && adicionados.length === 0 && removidos.length === 0) return;
+
+            // Encontra qual foi a mais recente (simplesmente desfaz a última de cada tipo verificando)
+            // Para simplificar: prioriza remoção > adição > troca (último adicionado em cada array)
+            if (removidos.length > 0) {
+                const ultimo = removidos.pop();
+                pedidoAtual.itens.push({
+                    sku: ultimo.sku,
+                    nome: ultimo.nome,
+                    esperado: ultimo.quantidade,
+                    conferido: 0,
+                    produtoId: ultimo.produtoId
+                });
+            } else if (adicionados.length > 0) {
+                adicionados.pop();
+                // Remove o último item adicionado da lista
+                for (let i = pedidoAtual.itens.length - 1; i >= 0; i--) {
+                    if (pedidoAtual.itens[i].adicionado) {
+                        pedidoAtual.itens.splice(i, 1);
+                        break;
+                    }
+                }
+            } else if (trocas.length > 0) {
+                const ultima = trocas.pop();
+                // Encontra o item trocado e reverte
+                const idx = pedidoAtual.itens.findIndex(i => i.trocado && i.produtoId === ultima.novoProdutoId);
+                if (idx !== -1) {
+                    pedidoAtual.itens[idx] = {
+                        sku: ultima.originalSku,
+                        nome: ultima.originalNome,
+                        esperado: ultima.quantidade,
+                        conferido: 0,
+                        produtoId: ultima.originalProdutoId
+                    };
+                }
+            }
+
+            atualizarListaInterface();
+            atualizarBtnDesfazer();
+        }
+
+        function atualizarBtnDesfazer() {
+            const btn = document.getElementById('btn-desfazer');
+            const temAlteracoes = (pedidoAtual.trocas?.length || 0) + (pedidoAtual.adicionados?.length || 0) + (pedidoAtual.removidos?.length || 0);
+            if (temAlteracoes > 0) btn.classList.remove('hidden');
+            else btn.classList.add('hidden');
+        }
+
         async function finalizarPacote() {
             const btn = document.getElementById('btn-finalizar'); btn.innerHTML = `<i data-lucide="loader-2" class="w-6 h-6 animate-spin"></i> SINCRONIZANDO...`; btn.disabled = true; lucide.createIcons();
             try {
-                const payload = { ...pedidoAtual, trocas: pedidoAtual.trocas || [] };
+                const payload = { ...pedidoAtual, trocas: pedidoAtual.trocas || [], adicionados: pedidoAtual.adicionados || [], removidos: pedidoAtual.removidos || [] };
                 const response = await fetch('/api/checkout/finalizar', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
                 const result = await response.json();
                 if (result.sucesso) { tocarSucesso(); alert(`📦 PACOTE LIBERADO!`); resetarTela(); } 
