@@ -370,7 +370,8 @@ async function buscarEstoque(accessToken) {
     id: p.id,
     codigo: p.codigo,
     gtin: p.gtin || '',
-    descricao: p.nome,
+    descricao: p.nome || p.descricao || '',
+    nome: p.nome || '',
     tipo: p.tipo || '',
     saldoFisicoTotal: mapaSaldos.get(p.id) ?? 0
   }));
@@ -1285,6 +1286,46 @@ app.get('/api/checkout/precarregar-produtos', async (req, res) => {
     }
 });
 
+// 🔍 DEBUG — Testa busca de produtos manualmente
+app.get('/api/checkout/debug-busca', async (req, res) => {
+    const termo = (req.query.q || '').toLowerCase().trim();
+    try {
+        const cacheLen = cacheProdutos ? cacheProdutos.length : 0;
+        const discoExiste = fs.existsSync(CATALOGO_CACHE_FILE);
+
+        // Amostra do cache
+        let amostra = [];
+        if (cacheProdutos && cacheProdutos.length > 0) {
+            amostra = cacheProdutos.slice(0, 5).map(p => ({
+                id: p.id, codigo: p.codigo, descricao: p.descricao, nome: p.nome, tipo: p.tipo, gtin: p.gtin
+            }));
+        }
+
+        // Tipos no cache
+        const tipos = {};
+        if (cacheProdutos) {
+            for (const p of cacheProdutos) {
+                tipos[p.tipo || 'undefined'] = (tipos[p.tipo || 'undefined'] || 0) + 1;
+            }
+        }
+
+        // Resultados da busca
+        let resultados = [];
+        if (termo && cacheProdutos) {
+            resultados = cacheProdutos.filter(p => {
+                const codigo = (p.codigo || '').toLowerCase();
+                const descricao = (p.descricao || p.nome || '').toLowerCase();
+                const gtin = (p.gtin || '').toLowerCase();
+                return codigo.includes(termo) || descricao.includes(termo) || gtin.includes(termo);
+            }).slice(0, 5).map(p => ({ codigo: p.codigo, descricao: p.descricao, tipo: p.tipo, gtin: p.gtin }));
+        }
+
+        res.json({ cacheLen, discoExiste, sincronizandoCatalogo, tipos, amostra, termoBuscado: termo, resultados });
+    } catch (e) {
+        res.status(500).json({ erro: e.message });
+    }
+});
+
 // 🔍 BUSCA DE PRODUTOS PARA TROCA NO CHECKOUT
 app.get('/api/checkout/buscar-produtos', async (req, res) => {
     const termo = (req.query.q || '').toLowerCase().trim();
@@ -1312,20 +1353,31 @@ app.get('/api/checkout/buscar-produtos', async (req, res) => {
             return res.json({ erro: 'cache_vazio', mensagem: 'Catálogo não carregado. Aguarde a sincronização ou acesse o Dashboard primeiro.' });
         }
 
+        // Log de diagnóstico: amostra dos primeiros 3 produtos para verificar estrutura
+        if (cacheProdutos.length > 0) {
+            const amostra = cacheProdutos.slice(0, 3).map(p => ({
+                codigo: p.codigo, descricao: p.descricao, tipo: p.tipo, nome: p.nome, gtin: p.gtin
+            }));
+            console.log(`   [Busca Troca] Amostra do cache:`, JSON.stringify(amostra));
+        }
+
         const resultados = cacheProdutos.filter(p => {
             if (p.tipo === 'P') return false; // ignora produtos pai
             const codigo = (p.codigo || '').toLowerCase();
-            const descricao = (p.descricao || '').toLowerCase();
+            const descricao = (p.descricao || p.nome || '').toLowerCase();
             const gtin = (p.gtin || '').toLowerCase();
             return codigo.includes(termo) || descricao.includes(termo) || gtin.includes(termo);
         }).slice(0, 20); // máximo 20 resultados
 
         console.log(`   [Busca Troca] Encontrados: ${resultados.length} resultado(s)`);
+        if (resultados.length > 0) {
+            console.log(`   [Busca Troca] Primeiro resultado:`, JSON.stringify({ codigo: resultados[0].codigo, descricao: resultados[0].descricao, tipo: resultados[0].tipo }));
+        }
 
         res.json(resultados.map(p => ({
             id: p.id,
             codigo: p.codigo,
-            descricao: p.descricao,
+            descricao: p.descricao || p.nome || 'Sem descrição',
             gtin: p.gtin,
             saldoFisicoTotal: p.saldoFisicoTotal
         })));
