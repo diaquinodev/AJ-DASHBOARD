@@ -122,9 +122,15 @@
         window.onload = async () => {
             alterarStatus("Sincronizando Bling...", 'buscando');
             try {
-                const res = await fetch('/api/checkout/sincronizar');
-                const data = await res.json();
-                if(data.sucesso) alterarStatus("Sistema Pronto", 'sucesso');
+                // Sincroniza pedidos e pré-carrega produtos em paralelo
+                const [resSync, resProd] = await Promise.all([
+                    fetch('/api/checkout/sincronizar'),
+                    fetch('/api/checkout/precarregar-produtos')
+                ]);
+                const dataSync = await resSync.json();
+                const dataProd = await resProd.json();
+                console.log('[Checkout] Pedidos:', dataSync, '| Produtos:', dataProd);
+                if(dataSync.sucesso) alterarStatus("Sistema Pronto", 'sucesso');
                 else alterarStatus("Pronto (Apenas Ficheiros)", 'alerta');
             } catch(e) { alterarStatus("Offline", 'erro'); }
         };
@@ -363,8 +369,17 @@
             timerBuscaTroca = setTimeout(async () => {
                 try {
                     const res = await fetch(`/api/checkout/buscar-produtos?q=${encodeURIComponent(termo)}`);
-                    const produtos = await res.json();
+                    const data = await res.json();
                     const lista = document.getElementById('lista-busca-troca');
+
+                    // Verifica se o backend retornou erro (cache vazio, etc)
+                    if (data.erro) {
+                        lista.innerHTML = `<li class="p-6 text-center text-amber-500 text-sm"><i data-lucide="alert-triangle" class="w-5 h-5 inline-block mr-2"></i>${data.mensagem || 'Catálogo não carregado. Acesse o Dashboard e sincronize primeiro.'}</li>`;
+                        lucide.createIcons();
+                        return;
+                    }
+
+                    const produtos = Array.isArray(data) ? data : [];
                     if (produtos.length === 0) {
                         lista.innerHTML = '<li class="p-6 text-center text-slate-400 text-sm">Nenhum produto encontrado.</li>';
                         return;

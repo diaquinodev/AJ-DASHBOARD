@@ -1248,6 +1248,43 @@ app.get('/api/produtos', async (req, res) => {
   }
 });
 
+// 🔍 DEBUG — Estado do cache de produtos
+app.get('/api/checkout/cache-status', (req, res) => {
+    res.json({
+        cacheProdutos: cacheProdutos ? cacheProdutos.length : 0,
+        ultimoCacheHora: ultimoCacheHora ? new Date(ultimoCacheHora).toLocaleString('pt-BR') : 'nunca',
+        sincronizandoCatalogo,
+        catalogoCacheExiste: fs.existsSync(CATALOGO_CACHE_FILE)
+    });
+});
+
+// 🔄 PRE-CARREGA PRODUTOS (chamado pelo checkout ao abrir)
+app.get('/api/checkout/precarregar-produtos', async (req, res) => {
+    if (cacheProdutos && cacheProdutos.length > 0) {
+        return res.json({ status: 'ok', total: cacheProdutos.length, fonte: 'memoria' });
+    }
+
+    // Tenta disco
+    const doDisco = lerCatalogoDoDisco();
+    if (doDisco && doDisco.produtos && doDisco.produtos.length > 0) {
+        cacheProdutos = doDisco.produtos;
+        ultimoCacheHora = doDisco.atualizadoEm || Date.now();
+        return res.json({ status: 'ok', total: cacheProdutos.length, fonte: 'disco' });
+    }
+
+    // Tenta API
+    try {
+        const token = await obterAccessToken();
+        cacheProdutos = await buscarEstoque(token);
+        ultimoCacheHora = Date.now();
+        salvarCatalogoNoDisco(cacheProdutos);
+        return res.json({ status: 'ok', total: cacheProdutos.length, fonte: 'api' });
+    } catch (e) {
+        console.error('   [Precarregar] Falha:', e.message);
+        return res.json({ status: 'erro', mensagem: e.message, total: 0 });
+    }
+});
+
 // 🔍 BUSCA DE PRODUTOS PARA TROCA NO CHECKOUT
 app.get('/api/checkout/buscar-produtos', async (req, res) => {
     const termo = (req.query.q || '').toLowerCase().trim();
@@ -1268,7 +1305,12 @@ app.get('/api/checkout/buscar-produtos', async (req, res) => {
             }
         }
 
-        console.log(`   [Busca Troca] Termo: "${termo}" | Cache: ${cacheProdutos.length} produtos`);
+        console.log(`   [Busca Troca] Termo: "${termo}" | Cache: ${cacheProdutos ? cacheProdutos.length : 'NULL'} produtos`);
+
+        if (!cacheProdutos || cacheProdutos.length === 0) {
+            console.log(`   [Busca Troca] ⚠️ CACHE VAZIO! Retornando erro para o frontend.`);
+            return res.json({ erro: 'cache_vazio', mensagem: 'Catálogo não carregado. Aguarde a sincronização ou acesse o Dashboard primeiro.' });
+        }
 
         const resultados = cacheProdutos.filter(p => {
             if (p.tipo === 'P') return false; // ignora produtos pai
@@ -1288,8 +1330,8 @@ app.get('/api/checkout/buscar-produtos', async (req, res) => {
             saldoFisicoTotal: p.saldoFisicoTotal
         })));
     } catch (e) {
-        console.error('Erro na busca de produtos para troca:', e.message);
-        res.json([]);
+        console.error('Erro na busca de produtos para troca:', e.message, e.stack);
+        res.status(500).json({ erro: e.message, produtos: [] });
     }
 });
 
