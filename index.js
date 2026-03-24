@@ -345,10 +345,14 @@ async function buscarEstoque(accessToken) {
     // Tenta pegar saldo específico do depósito SEDE
     if (s.depositos && Array.isArray(s.depositos)) {
       const depSede = s.depositos.find(d => d.id === DEPOSITO_SEDE_ID);
-      saldoSede = depSede?.saldoFisico ?? depSede?.saldoVirtual ?? 0;
-    }
-    // Fallback: se não tem breakdown por depósito, usa saldoFisicoTotal
-    if (saldoSede === 0 && !s.depositos) {
+      if (depSede) {
+        saldoSede = depSede.saldoFisico ?? depSede.saldoVirtual ?? 0;
+      } else {
+        // Depósito SEDE não encontrado na lista — usa saldoFisicoTotal como fallback
+        saldoSede = s.saldoFisicoTotal ?? 0;
+      }
+    } else {
+      // Sem breakdown por depósito — usa saldoFisicoTotal
       saldoSede = s.saldoFisicoTotal ?? 0;
     }
     mapaSaldos.set(idProduto, saldoSede);
@@ -917,20 +921,13 @@ app.get('/api/exportar-upseller', async (req, res) => {
     try {
         console.log(`\n📦 [UpSeller] Gerando ZIP (regra: >10un = 2000+real, ≤10un = 0)...`);
 
-        // Usa cache se disponível, senão busca do Bling
-        let produtos;
-        const trintaMinutos = 1800000;
-        if (cacheProdutos && cacheProdutos.length > 0 && (Date.now() - ultimoCacheHora < trintaMinutos)) {
-            console.log(`   [UpSeller] Usando cache (${cacheProdutos.length} produtos)`);
-            produtos = cacheProdutos;
-        } else {
-            console.log(`   [UpSeller] Sem cache, buscando do Bling...`);
-            const token = await obterAccessToken();
-            produtos = await buscarEstoque(token);
-            cacheProdutos = produtos;
-            ultimoCacheHora = Date.now();
-            console.log(`   [UpSeller] ${produtos.length} produtos do Bling.`);
-        }
+        // Sempre busca dados frescos do Bling para garantir estoque atualizado
+        console.log(`   [UpSeller] Buscando estoque atualizado do Bling...`);
+        const token = await obterAccessToken();
+        const produtos = await buscarEstoque(token);
+        cacheProdutos = produtos;
+        ultimoCacheHora = Date.now();
+        console.log(`   [UpSeller] ${produtos.length} produtos do Bling (dados frescos).`);
 
         if (!produtos || produtos.length === 0) {
             return res.status(404).json({ erro: "Nenhum produto encontrado no Bling." });
