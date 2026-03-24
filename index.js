@@ -550,6 +550,26 @@ app.get('/api/checkout/sincronizar', async (req, res) => {
         
         cachePedidosRecentes = tempPedidos;
         console.log(`✅ [Checkout] ${cachePedidosRecentes.length} pedidos em memória prontos para busca instantânea!`);
+
+        // Garante que o cache de produtos esteja populado (para busca na troca/adição)
+        if (!cacheProdutos || cacheProdutos.length === 0) {
+            const doDisco = lerCatalogoDoDisco();
+            if (doDisco && doDisco.produtos && doDisco.produtos.length > 0) {
+                cacheProdutos = doDisco.produtos;
+                ultimoCacheHora = doDisco.atualizadoEm || Date.now();
+                console.log(`   [Checkout] Cache de produtos carregado do disco: ${cacheProdutos.length} produtos`);
+            } else {
+                try {
+                    cacheProdutos = await buscarEstoque(token);
+                    ultimoCacheHora = Date.now();
+                    salvarCatalogoNoDisco(cacheProdutos);
+                    console.log(`   [Checkout] Cache de produtos carregado da API: ${cacheProdutos.length} produtos`);
+                } catch (e) {
+                    console.log(`   [Checkout] Aviso: não foi possível carregar produtos para troca: ${e.message}`);
+                }
+            }
+        }
+
         res.json({ sucesso: true, total: cachePedidosRecentes.length });
     } catch (e) {
         res.status(500).json({ erro: "Falha ao sincronizar pedidos" });
@@ -1234,24 +1254,37 @@ app.get('/api/checkout/buscar-produtos', async (req, res) => {
     if (termo.length < 2) return res.json([]);
 
     try {
-        // Usa cache se disponível, senão busca
+        // Usa cache se disponível, senão tenta disco, senão busca da API
         if (!cacheProdutos || cacheProdutos.length === 0) {
-            const token = await obterAccessToken();
-            cacheProdutos = await buscarEstoque(token);
-            ultimoCacheHora = Date.now();
+            const doDisco = lerCatalogoDoDisco();
+            if (doDisco && doDisco.produtos && doDisco.produtos.length > 0) {
+                cacheProdutos = doDisco.produtos;
+                ultimoCacheHora = doDisco.atualizadoEm || Date.now();
+                console.log(`   [Busca Troca] Cache carregado do disco: ${cacheProdutos.length} produtos`);
+            } else {
+                const token = await obterAccessToken();
+                cacheProdutos = await buscarEstoque(token);
+                ultimoCacheHora = Date.now();
+            }
         }
+
+        console.log(`   [Busca Troca] Termo: "${termo}" | Cache: ${cacheProdutos.length} produtos`);
 
         const resultados = cacheProdutos.filter(p => {
             if (p.tipo === 'P') return false; // ignora produtos pai
             const codigo = (p.codigo || '').toLowerCase();
             const descricao = (p.descricao || '').toLowerCase();
-            return codigo.includes(termo) || descricao.includes(termo);
+            const gtin = (p.gtin || '').toLowerCase();
+            return codigo.includes(termo) || descricao.includes(termo) || gtin.includes(termo);
         }).slice(0, 20); // máximo 20 resultados
+
+        console.log(`   [Busca Troca] Encontrados: ${resultados.length} resultado(s)`);
 
         res.json(resultados.map(p => ({
             id: p.id,
             codigo: p.codigo,
             descricao: p.descricao,
+            gtin: p.gtin,
             saldoFisicoTotal: p.saldoFisicoTotal
         })));
     } catch (e) {
