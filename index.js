@@ -1375,10 +1375,17 @@ app.get('/api/checkout/buscar-produtos', async (req, res) => {
             console.log(`   [Busca Troca] Amostra do cache:`, JSON.stringify(amostra));
         }
 
+        // Verifica se existem variações (tipo V) no cache — se não existem, todos são produtos simples
+        const temVariacoes = cacheProdutos.some(p => p.tipo === 'V');
+
         const resultados = cacheProdutos.filter(p => {
-            // Ignora produtos pai que não têm COR no nome (são agregadores sem estoque individual)
+            // Só ignora produtos pai (tipo P) se o catálogo TEM variações (tipo V)
+            // Se todos são tipo P, são produtos simples e devem ser buscáveis
+            if (temVariacoes && p.tipo === 'P') {
+                const desc2 = (p.descricao || p.nome || '').toLowerCase();
+                if (!desc2.includes('cor')) return false;
+            }
             const desc = (p.descricao || p.nome || '').toLowerCase();
-            if (p.tipo === 'P' && !desc.includes('cor')) return false;
             const codigo = (p.codigo || '').toLowerCase();
             const gtin = (p.gtin || '').toLowerCase();
             return codigo.includes(termo) || desc.includes(termo) || gtin.includes(termo);
