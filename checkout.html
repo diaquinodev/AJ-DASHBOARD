@@ -170,9 +170,9 @@
                 return;
             }
 
-            // Procura dentro do pedido atual as peças que combinam com o que foi digitado
+            // Procura dentro do pedido atual as peças que combinam com o que foi digitado (SKU, nome ou GTIN)
             const filtrados = pedidoAtual.itens.filter(i =>
-                (String(i.sku).toLowerCase().includes(termo) || String(i.nome).toLowerCase().includes(termo)) &&
+                (String(i.sku).toLowerCase().includes(termo) || String(i.nome).toLowerCase().includes(termo) || (i.gtin && String(i.gtin).toLowerCase().includes(termo))) &&
                 i.conferido < i.esperado
             );
 
@@ -248,16 +248,26 @@
             const skuTratado = String(skuLido).toLowerCase().trim();
             let itemEncontrado = pedidoAtual.itens.find(i => String(i.sku).toLowerCase() === skuTratado);
 
+            // Tenta match por GTIN (código de barras) se não achou por SKU
+            if (!itemEncontrado) {
+                itemEncontrado = pedidoAtual.itens.find(i => i.gtin && String(i.gtin).toLowerCase() === skuTratado && i.conferido < i.esperado);
+            }
+
             // Auto-complete inteligente
             if (!itemEncontrado) {
-                const parciais = pedidoAtual.itens.filter(i => (String(i.sku).toLowerCase().includes(skuTratado) || String(i.nome).toLowerCase().includes(skuTratado)) && i.conferido < i.esperado);
-                
+                const parciais = pedidoAtual.itens.filter(i => {
+                    const matchSku = String(i.sku).toLowerCase().includes(skuTratado);
+                    const matchNome = String(i.nome).toLowerCase().includes(skuTratado);
+                    const matchGtin = i.gtin && String(i.gtin).toLowerCase().includes(skuTratado);
+                    return (matchSku || matchNome || matchGtin) && i.conferido < i.esperado;
+                });
+
                 if (parciais.length === 1) {
                     itemEncontrado = parciais[0];
                 } else if (parciais.length > 1) {
                     tocarErro();
                     document.getElementById('input-produto').value = skuLido;
-                    filtrarItensPedido(); // Mantém a lista aberta para ele clicar na certa
+                    filtrarItensPedido();
                     alert(`⚠️ MÚLTIPLAS VARIAÇÕES!\nExistem ${parciais.length} peças pendentes compatíveis com "${skuLido}". Por favor, clique na variação correta na lista abaixo.`);
                     return;
                 }

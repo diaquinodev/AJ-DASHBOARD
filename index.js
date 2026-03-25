@@ -602,7 +602,13 @@ app.get('/api/checkout/pedido/:numero', async (req, res) => {
             if (mapaItens.has(i.sku)) {
                 mapaItens.get(i.sku).esperado += i.qtd;
             } else {
-                mapaItens.set(i.sku, { sku: i.sku, nome: i.nome, esperado: i.qtd, conferido: 0 });
+                // Busca GTIN no cache para permitir conferência por código de barras
+                let gtin = '';
+                if (cacheProdutos) {
+                    const cached = cacheProdutos.find(p => String(p.codigo).toLowerCase() === String(i.sku).toLowerCase());
+                    if (cached) gtin = cached.gtin || '';
+                }
+                mapaItens.set(i.sku, { sku: i.sku, gtin, nome: i.nome, esperado: i.qtd, conferido: 0 });
             }
         }
         return res.json({ origem: 'PLANILHA', numero: numero, itens: Array.from(mapaItens.values()) });
@@ -643,13 +649,29 @@ app.get('/api/checkout/pedido/:numero', async (req, res) => {
         console.log(`📦 Baixando peças do pedido...`);
         const respDetalhes = await axios.get(`https://www.bling.com.br/Api/v3/pedidos/vendas/${pedidoId}`, { headers: { Authorization: `Bearer ${token}` } });
         
-        const itensBling = respDetalhes.data.data.itens.map(i => ({
-            sku: i.codigo || i.produto?.codigo || "S/COD",
-            nome: i.descricao || "Produto Sem Nome",
-            esperado: Math.round(i.quantidade),
-            conferido: 0,
-            produtoId: i.produto?.id || null
-        }));
+        const itensBling = respDetalhes.data.data.itens.map(i => {
+            const sku = i.codigo || i.produto?.codigo || "S/COD";
+            const produtoId = i.produto?.id || null;
+            // Busca o GTIN no cache para permitir conferência por código de barras
+            let gtin = '';
+            if (cacheProdutos && produtoId) {
+                const cached = cacheProdutos.find(p => p.id === produtoId);
+                if (cached) gtin = cached.gtin || '';
+            }
+            // Se não achou por ID, tenta por código
+            if (!gtin && cacheProdutos) {
+                const cached = cacheProdutos.find(p => String(p.codigo).toLowerCase() === String(sku).toLowerCase());
+                if (cached) gtin = cached.gtin || '';
+            }
+            return {
+                sku,
+                gtin,
+                nome: i.descricao || "Produto Sem Nome",
+                esperado: Math.round(i.quantidade),
+                conferido: 0,
+                produtoId
+            };
+        });
 
         console.log(`✅ [Checkout] Sucesso!`);
         res.json({ origem: 'BLING', id: pedidoId, numero: numeroBling, numeroLoja: numero, itens: itensBling });
