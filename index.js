@@ -50,6 +50,17 @@ let cachePedidosRecentes = [];
 // 🏢 DEPÓSITO SEDE — Usado para consulta de saldo, entrada e saída
 const DEPOSITO_SEDE_ID = 14887498122;
 
+// Atualiza o saldo no cache local após operação de estoque (E = entrada, S = saída)
+function atualizarCacheEstoque(produtoId, quantidade, operacao) {
+  if (!cacheProdutos || !produtoId) return;
+  const produto = cacheProdutos.find(p => p.id === produtoId);
+  if (produto) {
+    const delta = operacao === 'E' ? quantidade : -quantidade;
+    produto.saldoFisicoTotal = Math.max(0, (produto.saldoFisicoTotal || 0) + delta);
+    console.log(`   [Cache] Atualizado estoque local: ID ${produtoId} → ${produto.saldoFisicoTotal} (${operacao === 'E' ? '+' : '-'}${quantidade})`);
+  }
+}
+
 // 📁 CACHE EM DISCO — Catálogo salvo em arquivo para carregamento instantâneo
 const CATALOGO_CACHE_FILE = path.join(__dirname, "catalogo-cache.json");
 const UPSELLER_CATALOGO_FILE = path.join(__dirname, "upseller-catalogo.json");
@@ -680,6 +691,7 @@ app.post('/api/checkout/finalizar', async (req, res) => {
                             observacoes: `Troca no Checkout - ENTRADA (item devolvido). Pedido: ${numero}`
                         }, { headers: { Authorization: `Bearer ${token}` } });
                         console.log(`   ✅ ENTRADA: ${troca.quantidade || 1}x "${troca.originalNome}" devolvido ao estoque`);
+                        atualizarCacheEstoque(troca.originalProdutoId, troca.quantidade || 1, 'E');
                     } catch (errEntrada) {
                         console.error(`   ⚠️ Erro na ENTRADA do item trocado "${troca.originalNome}":`, errEntrada.response?.data || errEntrada.message);
                     }
@@ -695,6 +707,7 @@ app.post('/api/checkout/finalizar', async (req, res) => {
                             observacoes: `Troca no Checkout - SAÍDA (item substituto). Pedido: ${numero}`
                         }, { headers: { Authorization: `Bearer ${token}` } });
                         console.log(`   ✅ SAÍDA: ${troca.quantidade || 1}x "${troca.novoNome}" retirado do estoque`);
+                        atualizarCacheEstoque(troca.novoProdutoId, troca.quantidade || 1, 'S');
                     } catch (errSaida) {
                         console.error(`   ⚠️ Erro na SAÍDA do novo item "${troca.novoNome}":`, errSaida.response?.data || errSaida.message);
                     }
@@ -723,6 +736,7 @@ app.post('/api/checkout/finalizar', async (req, res) => {
                             observacoes: `Item removido no Checkout - ENTRADA (devolvido ao estoque). Pedido: ${numero}`
                         }, { headers: { Authorization: `Bearer ${token}` } });
                         console.log(`   ✅ ENTRADA: ${item.quantidade || 1}x "${item.nome}" devolvido ao estoque (item removido)`);
+                        atualizarCacheEstoque(prodId, item.quantidade || 1, 'E');
                     } catch (err) {
                         console.error(`   ⚠️ Erro na ENTRADA do item removido "${item.nome}":`, err.response?.data || err.message);
                     }
@@ -746,6 +760,7 @@ app.post('/api/checkout/finalizar', async (req, res) => {
                             observacoes: `Item adicionado no Checkout - SAÍDA. Pedido: ${numero}`
                         }, { headers: { Authorization: `Bearer ${token}` } });
                         console.log(`   ✅ SAÍDA: ${item.quantidade || 1}x "${item.nome}" retirado do estoque (item adicionado)`);
+                        atualizarCacheEstoque(item.produtoId, item.quantidade || 1, 'S');
                     } catch (err) {
                         console.error(`   ⚠️ Erro na SAÍDA do item adicionado "${item.nome}":`, err.response?.data || err.message);
                     }
@@ -855,6 +870,7 @@ app.post('/api/checkout/finalizar', async (req, res) => {
                             observacoes: `Baixa via Checkout de Expedição. Pedido: ${numero}`
                         }, { headers: { Authorization: `Bearer ${token}` } });
                         baixasOk++;
+                        atualizarCacheEstoque(prodId, item.esperado, 'S');
                         console.log(`   📦 Saída registrada: ${item.esperado}x "${item.sku}" no depósito SEDE (Pedido ${numero})`);
                     } else {
                         baixasFalha++;
@@ -1694,10 +1710,11 @@ app.post('/api/wms/entrada', async (req, res) => {
     await axios.post("https://www.bling.com.br/Api/v3/estoques", {
       produto: { id: parseInt(idProduto) },
       deposito: { id: depositoId },
-      operacao: tipoOperacao, 
+      operacao: tipoOperacao,
       quantidade: parseFloat(quantidade),
       observacoes: tipoOperacao === 'E' ? "Entrada via WMS Local" : "Saída/Correção via WMS Local"
     }, { headers: { Authorization: `Bearer ${token}` } });
+    atualizarCacheEstoque(parseInt(idProduto), parseFloat(quantidade), tipoOperacao);
     res.json({ sucesso: true });
   } catch (error) {
     res.status(500).json({ erro: 'Erro ao salvar no Bling' });
