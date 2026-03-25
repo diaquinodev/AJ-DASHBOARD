@@ -1408,15 +1408,25 @@ app.get('/api/checkout/buscar-produtos', async (req, res) => {
         });
 
         // Ordena: prioriza matches na descrição que começam com o termo (ex: "107-")
+        // Depois agrupa por nome do modelo para manter variações juntas
         filtrados.sort((a, b) => {
             const descA = (a.descricao || a.nome || '').toLowerCase();
             const descB = (b.descricao || b.nome || '').toLowerCase();
-            const aStarts = descA.includes(termo + '-') || descA.startsWith(termo) ? 0 : 1;
-            const bStarts = descB.includes(termo + '-') || descB.startsWith(termo) ? 0 : 1;
-            return aStarts - bStarts;
+            // Prioridade 1: descrição começa com o termo (ex: "107- TRI MABEL")
+            const aDescStarts = descA.startsWith(termo + '-') || descA.startsWith(termo + ' ') ? 0 : 1;
+            const bDescStarts = descB.startsWith(termo + '-') || descB.startsWith(termo + ' ') ? 0 : 1;
+            if (aDescStarts !== bDescStarts) return aDescStarts - bDescStarts;
+            // Prioridade 2: código começa com o termo
+            const codA = (a.codigo || '').toLowerCase();
+            const codB = (b.codigo || '').toLowerCase();
+            const aCodStarts = codA.startsWith(termo) ? 0 : 1;
+            const bCodStarts = codB.startsWith(termo) ? 0 : 1;
+            if (aCodStarts !== bCodStarts) return aCodStarts - bCodStarts;
+            // Prioridade 3: ordem alfabética por descrição
+            return descA.localeCompare(descB);
         });
 
-        const resultados = filtrados.slice(0, 20); // máximo 20 resultados
+        const resultados = filtrados.slice(0, 50); // máximo 50 resultados
 
         console.log(`   [Busca Troca] Encontrados: ${resultados.length} resultado(s)`);
         if (resultados.length > 0) {
