@@ -1378,7 +1378,7 @@ app.get('/api/checkout/buscar-produtos', async (req, res) => {
         // Verifica se existem variações (tipo V) no cache — se não existem, todos são produtos simples
         const temVariacoes = cacheProdutos.some(p => p.tipo === 'V');
 
-        const resultados = cacheProdutos.filter(p => {
+        const filtrados = cacheProdutos.filter(p => {
             // Só ignora produtos pai (tipo P) se o catálogo TEM variações (tipo V)
             // Se todos são tipo P, são produtos simples e devem ser buscáveis
             if (temVariacoes && p.tipo === 'P') {
@@ -1389,7 +1389,18 @@ app.get('/api/checkout/buscar-produtos', async (req, res) => {
             const codigo = (p.codigo || '').toLowerCase();
             const gtin = (p.gtin || '').toLowerCase();
             return codigo.includes(termo) || desc.includes(termo) || gtin.includes(termo);
-        }).slice(0, 20); // máximo 20 resultados
+        });
+
+        // Ordena: prioriza matches na descrição que começam com o termo (ex: "107-")
+        filtrados.sort((a, b) => {
+            const descA = (a.descricao || a.nome || '').toLowerCase();
+            const descB = (b.descricao || b.nome || '').toLowerCase();
+            const aStarts = descA.includes(termo + '-') || descA.startsWith(termo) ? 0 : 1;
+            const bStarts = descB.includes(termo + '-') || descB.startsWith(termo) ? 0 : 1;
+            return aStarts - bStarts;
+        });
+
+        const resultados = filtrados.slice(0, 20); // máximo 20 resultados
 
         console.log(`   [Busca Troca] Encontrados: ${resultados.length} resultado(s)`);
         if (resultados.length > 0) {
