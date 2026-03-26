@@ -1110,6 +1110,7 @@ app.get('/api/exportar-upseller', async (req, res) => {
         let qtdZerado = 0;
         let qtdIgnorados = 0;
         let qtdSemMatch = 0;
+        let qtdKit = 0;
 
         // Cabeçalho exato da UpSeller (AOA = matriz)
         const dadosPlanilha = [
@@ -1144,18 +1145,29 @@ app.get('/api/exportar-upseller', async (req, res) => {
                 const produtoBling = buscarNoMapaBling(mapaBling, parsed.ref, parsed.cor, parsed.tam);
 
                 if (!produtoBling) {
-                    qtdSemMatch++;
-                    const chaveDebug = normalizarChaveMatch(parsed.ref, parsed.cor, parsed.tam);
-                    logConteudo += `[SEM MATCH] ${skuReal} → chave: ${chaveDebug} (enviando 0 para zerar na UpSeller)\n`;
-                    // Envia com quantidade 0 para zerar estoque na UpSeller (evita manter valor antigo/stale)
-                    dadosPlanilha.push([skuReal, "", 0, ""]);
+                    // Verifica se é um Kit — envia 100 ao invés de 0
+                    if (/kit/i.test(skuReal)) {
+                        qtdKit++;
+                        logConteudo += `[KIT] ${skuReal} — sem match no Bling, enviando 100 (kit)\n`;
+                        dadosPlanilha.push([skuReal, "", 100, ""]);
+                    } else {
+                        qtdSemMatch++;
+                        const chaveDebug = normalizarChaveMatch(parsed.ref, parsed.cor, parsed.tam);
+                        logConteudo += `[SEM MATCH] ${skuReal} → chave: ${chaveDebug} (enviando 0 para zerar na UpSeller)\n`;
+                        dadosPlanilha.push([skuReal, "", 0, ""]);
+                    }
                     continue;
                 }
 
                 const quantidadeReal = parseInt(produtoBling.saldoFisicoTotal) || 0;
                 let quantidadeUpSeller = 0;
 
-                if (quantidadeReal > 10) {
+                // Kit com match no Bling — sempre envia 100
+                if (/kit/i.test(skuReal)) {
+                    quantidadeUpSeller = 100;
+                    qtdKit++;
+                    logConteudo += `[KIT] ${skuReal} — real: ${quantidadeReal} → 100 (kit)\n`;
+                } else if (quantidadeReal > 10) {
                     quantidadeUpSeller = 2000 + quantidadeReal;
                     qtdAtivo++;
                     logConteudo += `[ATIVO] ${skuReal} — real: ${quantidadeReal} → ${quantidadeUpSeller}\n`;
@@ -1187,7 +1199,11 @@ app.get('/api/exportar-upseller', async (req, res) => {
                 const quantidadeReal = parseInt(p.saldoFisicoTotal) || 0;
                 let quantidadeUpSeller = 0;
 
-                if (quantidadeReal > 10) {
+                // Kit — sempre envia 100
+                if (/kit/i.test(skuLimpo)) {
+                    quantidadeUpSeller = 100;
+                    qtdKit++;
+                } else if (quantidadeReal > 10) {
                     quantidadeUpSeller = 2000 + quantidadeReal;
                     qtdAtivo++;
                 } else {
@@ -1205,9 +1221,10 @@ app.get('/api/exportar-upseller', async (req, res) => {
         logConteudo += `RESUMO:\n`;
         logConteudo += `- SKUs ATIVOS (estoque >10, enviado 2000+real): ${qtdAtivo}\n`;
         logConteudo += `- SKUs BAIXOS (estoque ≤10, enviado estoque real): ${qtdZerado}\n`;
+        if (qtdKit > 0) logConteudo += `- SKUs KIT (enviado 100): ${qtdKit}\n`;
         if (qtdSemMatch > 0) logConteudo += `- SKUs SEM MATCH no Bling (zerados na UpSeller): ${qtdSemMatch}\n`;
         logConteudo += `- Ignorados: ${qtdIgnorados}\n`;
-        logConteudo += `- Total de linhas na planilha: ${totalExportados + qtdSemMatch}\n`;
+        logConteudo += `- Total de linhas na planilha: ${totalExportados + qtdSemMatch + qtdKit}\n`;
         logConteudo += `====================================================\n`;
 
         console.log(`   [UpSeller] ${totalExportados} SKUs convertidos. ${qtdIgnorados} produtos-pai ignorados.`);
