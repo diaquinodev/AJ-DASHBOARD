@@ -1,0 +1,17 @@
+# Credenciais e tokens (NUNCA commitar)
+tokens.json
+.env
+
+# Dependencias
+node_modules/
+
+# Logs
+*.log
+
+# Cache local
+catalogo-cache.json
+catalogo-upseller.json
+
+# OS
+.DS_Store
+Thumbs.db

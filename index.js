@@ -20,12 +20,15 @@ const multer                = require("multer");
 const pdfParse              = require("pdf-parse"); // Adicionado suporte a PDF
 
 const delay = (ms) => new Promise(res => setTimeout(res, ms));
-const upload = multer({ storage: multer.memoryStorage() }); 
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } }); // max 10MB 
+
+// 🔐 Variáveis de ambiente (carrega .env se existir)
+try { require('dotenv').config(); } catch (_) { /* dotenv opcional */ }
 
 const CONFIG = {
   bling: {
-    clientId     : "0e1b32755e0a5c0d22bfaf0c6e58d7de886e45ee",
-    clientSecret : "50bdda91881b0b1981c7529677f5b99e825ffe9f7d7bfcffa422bde94f26",
+    clientId     : process.env.BLING_CLIENT_ID     || "0e1b32755e0a5c0d22bfaf0c6e58d7de886e45ee",
+    clientSecret : process.env.BLING_CLIENT_SECRET  || "50bdda91881b0b1981c7529677f5b99e825ffe9f7d7bfcffa422bde94f26",
     tokenFile    : path.join(__dirname, "tokens.json"),
   },
   whatsapp: {
@@ -403,8 +406,25 @@ async function buscarEstoque(accessToken) {
 
 const app = express();
 app.use(cors());
-app.use(express.static(__dirname)); 
-app.use(express.json());
+
+// 🔐 Serve apenas arquivos públicos (HTML) — bloqueia tokens.json, .git, etc.
+app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'dashboard.html')));
+app.get('/dashboard.html', (req, res) => res.sendFile(path.join(__dirname, 'dashboard.html')));
+app.get('/checkout.html', (req, res) => res.sendFile(path.join(__dirname, 'checkout.html')));
+app.get('/wms.html', (req, res) => res.sendFile(path.join(__dirname, 'wms.html')));
+
+app.use(express.json({ limit: '5mb' }));
+
+// 🏥 Health check — monitoramento do servidor
+app.get('/api/health', (req, res) => {
+    res.json({
+        status: 'ok',
+        uptime: Math.floor(process.uptime()),
+        cache: cacheProdutos ? cacheProdutos.length : 0,
+        memoria: Math.round(process.memoryUsage().heapUsed / 1024 / 1024) + 'MB',
+        operacoesPendentes: operacoesFinalizadas.size
+    });
+});
 
 // ──────────────────────────────────────────────
 // 🟢 UPLOAD INTELIGENTE (EXCEL UPSELLER, EXCEL BAGY e PDF)
@@ -733,7 +753,7 @@ app.post('/api/checkout/finalizar', async (req, res) => {
                             operacao: "E",
                             quantidade: troca.quantidade || 1,
                             observacoes: `Troca no Checkout - ENTRADA (item devolvido). Pedido: ${numero}`
-                        }, { headers: { Authorization: `Bearer ${token}` } });
+                        }, { headers: { Authorization: `Bearer ${token}` }, timeout: 15000 });
                         console.log(`   ✅ ENTRADA: ${troca.quantidade || 1}x "${troca.originalNome}" devolvido ao estoque`);
                         atualizarCacheEstoque(troca.originalProdutoId, troca.quantidade || 1, 'E');
                     } catch (errEntrada) {
@@ -749,7 +769,7 @@ app.post('/api/checkout/finalizar', async (req, res) => {
                             operacao: "S",
                             quantidade: troca.quantidade || 1,
                             observacoes: `Troca no Checkout - SAÍDA (item substituto). Pedido: ${numero}`
-                        }, { headers: { Authorization: `Bearer ${token}` } });
+                        }, { headers: { Authorization: `Bearer ${token}` }, timeout: 15000 });
                         console.log(`   ✅ SAÍDA: ${troca.quantidade || 1}x "${troca.novoNome}" retirado do estoque`);
                         atualizarCacheEstoque(troca.novoProdutoId, troca.quantidade || 1, 'S');
                     } catch (errSaida) {
@@ -778,7 +798,7 @@ app.post('/api/checkout/finalizar', async (req, res) => {
                             operacao: "E",
                             quantidade: item.quantidade || 1,
                             observacoes: `Item removido no Checkout - ENTRADA (devolvido ao estoque). Pedido: ${numero}`
-                        }, { headers: { Authorization: `Bearer ${token}` } });
+                        }, { headers: { Authorization: `Bearer ${token}` }, timeout: 15000 });
                         console.log(`   ✅ ENTRADA: ${item.quantidade || 1}x "${item.nome}" devolvido ao estoque (item removido)`);
                         atualizarCacheEstoque(prodId, item.quantidade || 1, 'E');
                     } catch (err) {
@@ -802,7 +822,7 @@ app.post('/api/checkout/finalizar', async (req, res) => {
                             operacao: "S",
                             quantidade: item.quantidade || 1,
                             observacoes: `Item adicionado no Checkout - SAÍDA. Pedido: ${numero}`
-                        }, { headers: { Authorization: `Bearer ${token}` } });
+                        }, { headers: { Authorization: `Bearer ${token}` }, timeout: 15000 });
                         console.log(`   ✅ SAÍDA: ${item.quantidade || 1}x "${item.nome}" retirado do estoque (item adicionado)`);
                         atualizarCacheEstoque(item.produtoId, item.quantidade || 1, 'S');
                     } catch (err) {
@@ -917,7 +937,7 @@ app.post('/api/checkout/finalizar', async (req, res) => {
                             operacao: "S",
                             quantidade: item.esperado,
                             observacoes: `Baixa via Checkout de Expedição. Pedido: ${numero}`
-                        }, { headers: { Authorization: `Bearer ${token}` } });
+                        }, { headers: { Authorization: `Bearer ${token}` }, timeout: 15000 });
                         baixasOk++;
                         atualizarCacheEstoque(prodId, item.esperado, 'S');
                         console.log(`   📦 Saída registrada: ${item.esperado}x "${item.sku}" no depósito SEDE (Pedido ${numero})`);
@@ -990,8 +1010,9 @@ function blingParaSkuUpSeller(nomeBling) {
 // ──────────────────────────────────────────────
 // 🔍 DIAGNÓSTICO DE SKUs (BLING → UPSELLER)
 // ──────────────────────────────────────────────
-// Acesse: http://localhost:3000/api/debug-skus
+// 🔒 Debug endpoints — somente em ambiente local
 app.get('/api/debug-skus', async (req, res) => {
+    if (process.env.NODE_ENV === 'production') return res.status(404).json({ erro: 'Não encontrado' });
     try {
         const token = await obterAccessToken();
         console.log(`\n🔍 [Debug] Buscando produtos para diagnóstico de SKU...`);
@@ -1291,6 +1312,7 @@ app.get('/api/exportar-upseller', async (req, res) => {
 
 // Rota de teste — verifica se o token do Bling funciona
 app.get('/api/teste-bling', async (req, res) => {
+  if (process.env.NODE_ENV === 'production') return res.status(404).json({ erro: 'Não encontrado' });
   try {
     console.log("   [Teste] Verificando conexão com o Bling...");
     const token = await obterAccessToken();
@@ -1342,6 +1364,7 @@ app.get('/api/produtos', async (req, res) => {
 
 // 🔍 DEBUG — Estado do cache de produtos
 app.get('/api/checkout/cache-status', (req, res) => {
+    if (process.env.NODE_ENV === 'production') return res.status(404).json({ erro: 'Não encontrado' });
     // Conta tipos de produtos no cache
     const tipos = {};
     let amostra = [];
@@ -1393,6 +1416,7 @@ app.get('/api/checkout/precarregar-produtos', async (req, res) => {
 
 // 🔍 DEBUG — Testa busca de produtos manualmente
 app.get('/api/checkout/debug-busca', async (req, res) => {
+    if (process.env.NODE_ENV === 'production') return res.status(404).json({ erro: 'Não encontrado' });
     const termo = (req.query.q || '').toLowerCase().trim();
     try {
         const cacheLen = cacheProdutos ? cacheProdutos.length : 0;
@@ -1777,6 +1801,7 @@ app.get('/api/wms/produto/:codigo', async (req, res) => {
 
 // Rota para listar depósitos do Bling
 app.get('/api/debug-depositos', async (req, res) => {
+  if (process.env.NODE_ENV === 'production') return res.status(404).json({ erro: 'Não encontrado' });
   try {
     const token = await obterAccessToken();
     const resp = await axios.get('https://www.bling.com.br/Api/v3/depositos', { headers: { Authorization: `Bearer ${token}` } });
@@ -1789,19 +1814,27 @@ app.get('/api/debug-depositos', async (req, res) => {
 app.post('/api/wms/entrada', async (req, res) => {
   try {
     const { idProduto, quantidade, operacao } = req.body;
+
+    // 🛡️ Validação de entrada — evita valores inválidos
+    const qtd = parseFloat(quantidade);
+    const id = parseInt(idProduto);
+    if (!id || isNaN(id) || id <= 0) return res.status(400).json({ erro: 'ID do produto inválido.' });
+    if (!qtd || isNaN(qtd) || qtd <= 0 || qtd > 99999) return res.status(400).json({ erro: 'Quantidade inválida (deve ser entre 1 e 99999).' });
+
     const token = await obterAccessToken();
     const depositoId = DEPOSITO_SEDE_ID;
     const tipoOperacao = operacao === 'S' ? 'S' : 'E';
     await axios.post("https://www.bling.com.br/Api/v3/estoques", {
-      produto: { id: parseInt(idProduto) },
+      produto: { id },
       deposito: { id: depositoId },
       operacao: tipoOperacao,
-      quantidade: parseFloat(quantidade),
+      quantidade: qtd,
       observacoes: tipoOperacao === 'E' ? "Entrada via WMS Local" : "Saída/Correção via WMS Local"
-    }, { headers: { Authorization: `Bearer ${token}` } });
-    atualizarCacheEstoque(parseInt(idProduto), parseFloat(quantidade), tipoOperacao);
+    }, { headers: { Authorization: `Bearer ${token}` }, timeout: 15000 });
+    atualizarCacheEstoque(id, qtd, tipoOperacao);
     res.json({ sucesso: true });
   } catch (error) {
+    console.error(`⚠️ [WMS] Erro na movimentação:`, error.response?.data || error.message);
     res.status(500).json({ erro: 'Erro ao salvar no Bling' });
   }
 });
@@ -1875,6 +1908,23 @@ app.listen(3000, "0.0.0.0", () => {
     console.log("\n   [Auto-Sync] Sincronização periódica (30 min)...");
     sincronizarCatalogoEmSegundoPlano();
   }, 30 * 60 * 1000);
+
+  // 🧹 Limpa operações expiradas a cada 10 minutos (evita memory leak)
+  setInterval(() => {
+    const antes = operacoesFinalizadas.size;
+    limparOperacoesExpiradas();
+    const removidos = antes - operacoesFinalizadas.size;
+    if (removidos > 0) console.log(`   [Cleanup] ${removidos} operação(ões) expirada(s) removida(s) da memória`);
+  }, 10 * 60 * 1000);
+});
+
+// 🛡️ Captura erros não tratados para evitar crash total do servidor
+process.on('uncaughtException', (err) => {
+  console.error('❌ [ERRO FATAL NÃO CAPTURADO]:', err.message);
+  console.error(err.stack);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('❌ [PROMISE REJEITADA NÃO TRATADA]:', reason);
 });
 
 // WHATSAPP — DESATIVADO TEMPORARIAMENTE
