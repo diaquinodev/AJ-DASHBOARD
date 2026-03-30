@@ -612,14 +612,46 @@
         }
 
         async function finalizarPacote() {
-            const btn = document.getElementById('btn-finalizar'); btn.innerHTML = `<i data-lucide="loader-2" class="w-6 h-6 animate-spin"></i> SINCRONIZANDO...`; btn.disabled = true; lucide.createIcons();
+            const btn = document.getElementById('btn-finalizar');
+            btn.innerHTML = `<i data-lucide="loader-2" class="w-6 h-6 animate-spin"></i> SINCRONIZANDO...`;
+            btn.disabled = true;
+            lucide.createIcons();
+
+            // 🔒 Gera chave única para esta operação (evita duplicidade se o usuário tentar novamente)
+            if (!pedidoAtual._idempotencyKey) {
+                pedidoAtual._idempotencyKey = `${pedidoAtual.numero}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+            }
+
             try {
-                const payload = { ...pedidoAtual, trocas: pedidoAtual.trocas || [], adicionados: pedidoAtual.adicionados || [], removidos: pedidoAtual.removidos || [] };
+                const payload = {
+                    ...pedidoAtual,
+                    trocas: pedidoAtual.trocas || [],
+                    adicionados: pedidoAtual.adicionados || [],
+                    removidos: pedidoAtual.removidos || [],
+                    idempotencyKey: pedidoAtual._idempotencyKey
+                };
                 const response = await fetch('/api/checkout/finalizar', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
                 const result = await response.json();
-                if (result.sucesso) { tocarSucesso(); alert(`📦 PACOTE LIBERADO!`); resetarTela(); } 
-                else { tocarErro(); alert("Erro no Bling."); btn.innerHTML = "TENTAR NOVAMENTE"; btn.disabled = false; }
-            } catch (e) { tocarErro(); alert("Falha de conexão."); btn.innerHTML = "TENTAR NOVAMENTE"; btn.disabled = false; }
+
+                if (result.sucesso) {
+                    tocarSucesso();
+                    const msg = result.aviso ? `📦 PACOTE LIBERADO!\n\n⚠️ ${result.aviso}` : '📦 PACOTE LIBERADO!';
+                    alert(msg);
+                    resetarTela();
+                } else {
+                    tocarErro();
+                    alert('Erro ao finalizar: ' + (result.erro || 'Erro desconhecido'));
+                    btn.innerHTML = `<i data-lucide="rotate-ccw" class="w-5 h-5"></i> TENTAR NOVAMENTE`;
+                    btn.disabled = false;
+                    lucide.createIcons();
+                }
+            } catch (e) {
+                tocarErro();
+                alert('Falha de conexão com o servidor. Tente novamente.');
+                btn.innerHTML = `<i data-lucide="rotate-ccw" class="w-5 h-5"></i> TENTAR NOVAMENTE`;
+                btn.disabled = false;
+                lucide.createIcons();
+            }
         }
 
         function resetarTela() {

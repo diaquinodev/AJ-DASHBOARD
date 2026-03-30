@@ -47,6 +47,19 @@ let cacheProdutos = null;
 let ultimoCacheHora = 0;
 let cachePedidosRecentes = [];
 
+// 🔒 PROTEÇÃO CONTRA DUPLICIDADE — Registra operações já processadas
+const operacoesFinalizadas = new Map(); // chave: idempotencyKey → { timestamp, resultado }
+const EXPIRACAO_OPERACAO_MS = 30 * 60 * 1000; // 30 minutos
+
+function limparOperacoesExpiradas() {
+    const agora = Date.now();
+    for (const [chave, dados] of operacoesFinalizadas) {
+        if (agora - dados.timestamp > EXPIRACAO_OPERACAO_MS) {
+            operacoesFinalizadas.delete(chave);
+        }
+    }
+}
+
 // 🏢 DEPÓSITO SEDE — Usado para consulta de saldo, entrada e saída
 const DEPOSITO_SEDE_ID = 14887498122;
 
@@ -683,7 +696,16 @@ app.get('/api/checkout/pedido/:numero', async (req, res) => {
 
 // 👇 ROTA DE FINALIZAR PEDIDO 👇
 app.post('/api/checkout/finalizar', async (req, res) => {
-    const { origem, id, itens, numero, trocas, adicionados, removidos } = req.body;
+    const { origem, id, itens, numero, trocas, adicionados, removidos, idempotencyKey } = req.body;
+
+    // 🔒 PROTEÇÃO CONTRA DUPLICIDADE
+    limparOperacoesExpiradas();
+    if (idempotencyKey && operacoesFinalizadas.has(idempotencyKey)) {
+        const operacaoAnterior = operacoesFinalizadas.get(idempotencyKey);
+        console.log(`🔒 [Checkout] Operação duplicada bloqueada! Pedido ${numero} (key: ${idempotencyKey}) já foi processado em ${new Date(operacaoAnterior.timestamp).toLocaleTimeString()}`);
+        return res.json(operacaoAnterior.resultado);
+    }
+
     try {
         const token = await obterAccessToken();
         const depositoId = DEPOSITO_SEDE_ID;
@@ -910,10 +932,17 @@ app.post('/api/checkout/finalizar', async (req, res) => {
             }
             console.log(`✅ [Checkout] Pedido Planilha/UpSeller ${numero} finalizado. Baixas OK: ${baixasOk} | Falhas: ${baixasFalha}`);
             if (baixasFalha > 0) {
-                return res.json({ sucesso: true, aviso: `${baixasFalha} SKU(s) não encontrado(s) na Bling. Verifique o log do servidor.` });
+                const resultado = { sucesso: true, aviso: `${baixasFalha} SKU(s) não encontrado(s) na Bling. Verifique o log do servidor.` };
+                if (idempotencyKey) operacoesFinalizadas.set(idempotencyKey, { timestamp: Date.now(), resultado });
+                return res.json(resultado);
             }
         }
-        res.json({ sucesso: true });
+
+        // 🔒 Registra operação como concluída
+        const resultado = { sucesso: true };
+        if (idempotencyKey) operacoesFinalizadas.set(idempotencyKey, { timestamp: Date.now(), resultado });
+        console.log(`🔒 [Checkout] Operação registrada com sucesso (key: ${idempotencyKey || 'sem-key'})`);
+        res.json(resultado);
     } catch (e) {
         console.error(e);
         res.status(500).json({ erro: "Erro ao finalizar pedido no servidor." });
