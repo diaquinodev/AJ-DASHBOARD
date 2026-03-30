@@ -811,10 +811,15 @@ app.post('/api/checkout/finalizar', async (req, res) => {
                 console.error(`⚠️ Erro ao injetar Loja/Vendedor (mas o pacote será finalizado mesmo assim).`);
             }
 
-            await axios.patch(`https://www.bling.com.br/Api/v3/pedidos/vendas/${id}/situacoes/9`, {}, {
-                headers: { Authorization: `Bearer ${token}` }
-            });
-            console.log(`✅ [Checkout] Pedido Bling ${numero} marcado como Atendido!`);
+            try {
+                await axios.patch(`https://www.bling.com.br/Api/v3/pedidos/vendas/${id}/situacoes/9`, {}, {
+                    headers: { Authorization: `Bearer ${token}` }
+                });
+                console.log(`✅ [Checkout] Pedido Bling ${numero} marcado como Atendido!`);
+            } catch (errSituacao) {
+                console.error(`⚠️ Erro ao mudar situação do pedido ${numero} para Atendido:`, errSituacao.response?.data || errSituacao.message);
+                console.log(`   (As movimentações de estoque foram realizadas com sucesso)`);
+            }
 
         } else {
             let baixasOk = 0;
