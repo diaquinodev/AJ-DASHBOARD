@@ -2146,10 +2146,12 @@ async function gerarAlertasFiltrados(filtro) {
     return { erro: `⚠️ Referência "${filtroRef}" não está na lista monitorada.\n\n📋 *Refs monitoradas:*\n${REFS_MONITORADAS.join(', ')}` };
   }
 
-  // Filtra variações monitoradas
+  // Filtra variações monitoradas (só inclui produtos com COR na descrição = variações reais)
   const produtosMonitorados = cacheProdutos.filter(p => {
     const ref = extrairRef(p.descricao);
-    if (!ref || p.tipo === 'P') return false;
+    if (!ref) return false;
+    // Ignora produtos-pai sem cor (não são variações individuais)
+    if (!(p.descricao || '').match(/COR:/i)) return false;
     if (filtroRef) return ref === filtroRef;
     return REFS_MONITORADAS.includes(ref);
   });
