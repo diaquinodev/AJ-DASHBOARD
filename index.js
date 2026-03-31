@@ -716,25 +716,33 @@ app.get('/api/checkout/pedido/:numero', async (req, res) => {
         const itensBling = respDetalhes.data.data.itens.map(i => {
             const sku = i.codigo || i.produto?.codigo || "S/COD";
             const produtoId = i.produto?.id || null;
-            // Busca o GTIN no cache para permitir conferência por código de barras
+            // Busca GTIN e código Bling no cache para conferência por código de barras
             let gtin = '';
+            let codigoBling = '';
             if (cacheProdutos && produtoId) {
                 const cached = cacheProdutos.find(p => p.id === produtoId);
-                if (cached) gtin = cached.gtin || '';
+                if (cached) {
+                    gtin = cached.gtin || '';
+                    codigoBling = cached.codigo || '';
+                }
             }
             // Se não achou por ID, tenta por código (com e sem zeros à esquerda)
-            if (!gtin && cacheProdutos) {
+            if (!codigoBling && cacheProdutos) {
                 const skuLower = String(sku).toLowerCase();
                 const skuSemZeros = skuLower.replace(/^0+/, '') || '0';
                 const cached = cacheProdutos.find(p => {
                     const cod = String(p.codigo).toLowerCase();
                     return cod === skuLower || cod.replace(/^0+/, '') === skuSemZeros;
                 });
-                if (cached) gtin = cached.gtin || '';
+                if (cached) {
+                    gtin = gtin || cached.gtin || '';
+                    codigoBling = cached.codigo || '';
+                }
             }
             return {
                 sku,
                 gtin,
+                codigoBling,
                 nome: i.descricao || "Produto Sem Nome",
                 esperado: Math.round(i.quantidade),
                 conferido: 0,
