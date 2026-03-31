@@ -297,28 +297,30 @@
             const skuTratado = String(skuLido).toLowerCase().trim();
             const skuSemZeros = semZerosEsquerda(skuTratado);
 
-            // 1. Match exato por SKU
-            let itemEncontrado = pedidoAtual.itens.find(i => String(i.sku).toLowerCase() === skuTratado);
-
-            // 2. Match por SKU ignorando zeros à esquerda (ex: bip "0000159083978" vs sku "159083978")
-            if (!itemEncontrado) {
-                itemEncontrado = pedidoAtual.itens.find(i => semZerosEsquerda(String(i.sku).toLowerCase()) === skuSemZeros && i.conferido < i.esperado);
+            // Helper: testa se um item bate com o código lido
+            function matchItem(i) {
+                const sku = String(i.sku).toLowerCase();
+                if (sku === skuTratado) return true;
+                if (semZerosEsquerda(sku) === skuSemZeros) return true;
+                if (i.gtin && (String(i.gtin).toLowerCase() === skuTratado || semZerosEsquerda(String(i.gtin).toLowerCase()) === skuSemZeros)) return true;
+                if (i.codigoBling && (String(i.codigoBling).toLowerCase() === skuTratado || semZerosEsquerda(String(i.codigoBling).toLowerCase()) === skuSemZeros)) return true;
+                return false;
             }
 
-            // 3. Match por GTIN (código de barras)
+            // 1. Busca item pendente (conferido < esperado) — prioridade
+            let itemEncontrado = pedidoAtual.itens.find(i => matchItem(i) && i.conferido < i.esperado);
+
+            // 2. Se não achou pendente, busca qualquer item que bate (para mostrar erro adequado)
+            let itemJaConferido = null;
             if (!itemEncontrado) {
-                itemEncontrado = pedidoAtual.itens.find(i => i.gtin && (String(i.gtin).toLowerCase() === skuTratado || semZerosEsquerda(String(i.gtin).toLowerCase()) === skuSemZeros) && i.conferido < i.esperado);
+                itemJaConferido = pedidoAtual.itens.find(i => matchItem(i));
             }
 
-            // 4. Match por código Bling (etiquetas com código interno)
-            if (!itemEncontrado) {
-                itemEncontrado = pedidoAtual.itens.find(i => i.codigoBling && (String(i.codigoBling).toLowerCase() === skuTratado || semZerosEsquerda(String(i.codigoBling).toLowerCase()) === skuSemZeros) && i.conferido < i.esperado);
-            }
-
-            // 5. Auto-complete inteligente
-            if (!itemEncontrado) {
+            // 3. Auto-complete inteligente (busca parcial)
+            if (!itemEncontrado && !itemJaConferido) {
                 const parciais = pedidoAtual.itens.filter(i => {
-                    const matchSku = String(i.sku).toLowerCase().includes(skuTratado) || semZerosEsquerda(String(i.sku).toLowerCase()) === skuSemZeros;
+                    const sku = String(i.sku).toLowerCase();
+                    const matchSku = sku.includes(skuTratado) || semZerosEsquerda(sku) === skuSemZeros;
                     const matchNome = String(i.nome).toLowerCase().includes(skuTratado);
                     const matchGtin = i.gtin && (String(i.gtin).toLowerCase().includes(skuTratado) || semZerosEsquerda(String(i.gtin).toLowerCase()) === skuSemZeros);
                     const matchCodBling = i.codigoBling && (String(i.codigoBling).toLowerCase().includes(skuTratado) || semZerosEsquerda(String(i.codigoBling).toLowerCase()) === skuSemZeros);
@@ -337,17 +339,15 @@
             }
 
             if (itemEncontrado) {
-                if (itemEncontrado.conferido < itemEncontrado.esperado) { 
-                    itemEncontrado.conferido++; 
-                    tocarSucesso(); 
-                    document.getElementById('input-produto').value = '';
-                    document.getElementById('resultado-busca-produto').classList.add('hidden');
-                    atualizarListaInterface(); 
-                } else { 
-                    tocarErro(); alert(`❌ ERRO: O pedido exige apenas ${itemEncontrado.esperado} unidade(s) de ${itemEncontrado.sku}.`); 
-                }
-            } else { 
-                tocarErro(); alert(`❌ PRODUTO INCORRETO!\nO SKU "${skuLido}" NÃO pertence a este pedido ou já foi conferido!`); 
+                itemEncontrado.conferido++;
+                tocarSucesso();
+                document.getElementById('input-produto').value = '';
+                document.getElementById('resultado-busca-produto').classList.add('hidden');
+                atualizarListaInterface();
+            } else if (itemJaConferido) {
+                tocarErro(); alert(`❌ JÁ CONFERIDO!\n"${itemJaConferido.nome}" já teve ${itemJaConferido.esperado} unidade(s) conferida(s).`);
+            } else {
+                tocarErro(); alert(`❌ PRODUTO INCORRETO!\nO SKU "${skuLido}" NÃO pertence a este pedido.`);
             }
         }
 
