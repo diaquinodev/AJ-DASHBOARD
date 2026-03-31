@@ -2009,11 +2009,12 @@ wppClient.on("disconnected", (reason) => {
   console.log("⚠️ [WhatsApp] Desconectado:", reason);
 });
 
-wppClient.initialize();
-
-// 📩 Listener de comandos no grupo WhatsApp
-wppClient.on('message', async (msg) => {
+// 📩 Listener de comandos no grupo WhatsApp (registrado ANTES do initialize)
+wppClient.on('message_create', async (msg) => {
   try {
+    // Ignora mensagens enviadas pelo próprio bot
+    if (msg.fromMe) return;
+
     const chat = await msg.getChat();
     if (!chat.isGroup || chat.name !== CONFIG.whatsapp.nomeDoGrupo) return;
 
@@ -2059,6 +2060,8 @@ wppClient.on('message', async (msg) => {
     console.error('   [WhatsApp] Erro ao processar comando:', e.message);
   }
 });
+
+wppClient.initialize();
 
 // Extrai referência numérica do início da descrição (ex: "31- CONJUNTO SUÍÇA" → "31")
 function extrairRef(descricao) {
