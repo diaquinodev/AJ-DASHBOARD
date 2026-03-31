@@ -5,10 +5,9 @@
  * ============================================================
  */
 
-const archiver              = require('archiver'); // 👈 Adicionado para gerar o ZIP
-// WhatsApp desativado temporariamente
-// const { Client, LocalAuth } = require("whatsapp-web.js");
-// const qrcode                = require("qrcode-terminal");
+const archiver              = require('archiver');
+const { Client, LocalAuth } = require("whatsapp-web.js");
+const qrcode                = require("qrcode-terminal");
 const cron                  = require("node-cron");
 const axios                 = require("axios");
 const fs                    = require("fs");
@@ -32,7 +31,7 @@ const CONFIG = {
     tokenFile    : path.join(__dirname, "tokens.json"),
   },
   whatsapp: {
-    nomeDoGrupo: "Controle de Estoque"
+    nomeDoGrupo: "Estoque Marketplace"
   },
   limiteMin: 0,
   limiteMax: 10,
@@ -247,6 +246,9 @@ async function sincronizarCatalogoEmSegundoPlano() {
     ultimoCacheHora = Date.now();
     salvarCatalogoNoDisco(produtos);
     console.log(`   [Sync] Sincronização concluída! ${produtos.length} produtos atualizados.`);
+
+    // Dispara verificação de estoque após sincronizar
+    verificarEstoqueEAlertar().catch(e => console.error('   [Alerta] Erro:', e.message));
   } catch (e) {
     console.error("   [Sync] Falha na sincronização:", e.message);
   } finally {
@@ -1971,42 +1973,201 @@ process.on('unhandledRejection', (reason) => {
   console.error('❌ [PROMISE REJEITADA NÃO TRATADA]:', reason);
 });
 
-// WHATSAPP — DESATIVADO TEMPORARIAMENTE
-// const wppClient = new Client({ authStrategy: new LocalAuth(), puppeteer: { args: ["--no-sandbox", "--disable-setuid-sandbox"] } });
-// wppClient.on("qr", (qr) => { qrcode.generate(qr, { small: true }); });
-// wppClient.on("ready", () => { console.log("✅ [Robô] WhatsApp conectado!"); });
-// wppClient.initialize();
-console.log("ℹ️  [WhatsApp] Robô desativado temporariamente.");
+// ══════════════════════════════════════════════════
+// 📱 WHATSAPP — ALERTA DE ESTOQUE MARKETPLACE
+// ══════════════════════════════════════════════════
 
-function filtrarEmRisco(produtos) {
-  return produtos.filter(p => {
-    const emRisco = p.saldoFisicoTotal >= CONFIG.limiteMin && p.saldoFisicoTotal <= CONFIG.limiteMax;
-    if (!emRisco) return false;
-    let ref = "";
-    let nomeLimpo = p.descricao || "";
-    const regexRef = /^(\d+)\s*[-_]\s*/;
-    const matchRef = nomeLimpo.match(regexRef);
-    if (matchRef) ref = matchRef[1];
-    else ref = p.codigo ? p.codigo.split(/[-_]/)[0] : "";
-    if (CONFIG.ignorarRefs.includes(ref)) return false;
-    return true;
+const DEPOSITO_BASE_ID = 14887397316;
+
+// Referências monitoradas (lista fixa de produtos prioritários)
+const REFS_MONITORADAS = [
+  '08', '15', '29', '31', '54', '104', '107', '108',
+  '110', '129', '138', '146', '160', '163', '171', '172', '176', '188'
+];
+
+const MINIMO_SEDE = 30;
+const MINIMO_BASE = 60;
+
+// Último snapshot de alertas enviados (para detectar mudanças)
+let ultimoAlertaHash = '';
+
+const wppClient = new Client({
+  authStrategy: new LocalAuth(),
+  puppeteer: { args: ["--no-sandbox", "--disable-setuid-sandbox"] }
+});
+
+wppClient.on("qr", (qr) => {
+  console.log("\n📱 [WhatsApp] Escaneie o QR Code abaixo para conectar:");
+  qrcode.generate(qr, { small: true });
+});
+
+wppClient.on("ready", () => {
+  console.log("✅ [WhatsApp] Conectado ao grupo 'Estoque Marketplace'!");
+});
+
+wppClient.on("disconnected", (reason) => {
+  console.log("⚠️ [WhatsApp] Desconectado:", reason);
+});
+
+wppClient.initialize();
+
+// Extrai referência numérica do início da descrição (ex: "31- CONJUNTO SUÍÇA" → "31")
+function extrairRef(descricao) {
+  const match = (descricao || '').match(/^(\d+)/);
+  return match ? match[1] : null;
+}
+
+// Extrai cor e tamanho da descrição Bling
+function extrairCorTam(descricao) {
+  let cor = '-', tam = '-';
+  const matchCor = (descricao || '').match(/COR:\s*([^;]+)/i);
+  if (matchCor) cor = matchCor[1].trim();
+  const matchTam = (descricao || '').match(/TAM(?:ANHO)?:\s*([^;,\s]+)/i);
+  if (matchTam) tam = matchTam[1].trim();
+  return { cor, tam };
+}
+
+// Extrai nome limpo do produto (sem cor/tamanho)
+function extrairNomeLimpo(descricao) {
+  return (descricao || 'Sem descrição')
+    .replace(/COR:\s*[^;]+/i, '')
+    .replace(/TAM(?:ANHO)?:\s*[^;,\s]+/i, '')
+    .replace(/;/g, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
+// Busca saldos de um depósito específico para uma lista de produto IDs
+async function buscarSaldosPorDeposito(token, produtoIds, depositoId) {
+  const mapa = new Map();
+  const batchSize = 100;
+  for (let i = 0; i < produtoIds.length; i += batchSize) {
+    const batch = produtoIds.slice(i, i + batchSize);
+    const idsParam = batch.join('&idsProdutos[]=');
+    try {
+      const resp = await blingRequest(
+        `https://www.bling.com.br/Api/v3/estoques/saldos?idsProdutos[]=${idsParam}`,
+        token
+      );
+      const saldos = resp.data?.data || [];
+      for (const s of saldos) {
+        const idProduto = s.produto?.id;
+        if (!idProduto) continue;
+        let saldo = 0;
+        if (s.depositos && Array.isArray(s.depositos)) {
+          const dep = s.depositos.find(d => d.id === depositoId);
+          if (dep) saldo = dep.saldoFisico ?? dep.saldoVirtual ?? 0;
+        }
+        mapa.set(idProduto, saldo);
+      }
+    } catch (e) {
+      console.error(`   [Alerta] Erro ao buscar saldos (batch ${i}):`, e.message);
+    }
+    if (i + batchSize < produtoIds.length) await delay(500);
+  }
+  return mapa;
+}
+
+// Formata mensagem individual de alerta para um produto
+function formatarAlertaProduto(produto, deposito, saldo, minimo) {
+  const { cor, tam } = extrairCorTam(produto.descricao);
+  const nomeLimpo = extrairNomeLimpo(produto.descricao);
+
+  let linhaEstoque;
+  if (saldo === 0) {
+    linhaEstoque = `🚨 *ESTOQUE ZERADO* → Prioridade!`;
+  } else {
+    linhaEstoque = `⚠️ *${deposito}:* ${saldo} peças (mín: ${minimo}) → Repor!`;
+  }
+
+  return `📦 *SKU:* ${produto.codigo || 'S/COD'}\n🏷️ *Produto:* ${nomeLimpo}\n🎨 *Cor:* ${cor}  |  👗 *Tam:* ${tam}\n${linhaEstoque}`;
+}
+
+// Função principal: verifica estoque e envia alertas no WhatsApp
+async function verificarEstoqueEAlertar() {
+  if (!cacheProdutos || cacheProdutos.length === 0) {
+    console.log('   [Alerta] Cache vazio, pulando verificação.');
+    return;
+  }
+
+  // Filtra apenas variações das referências monitoradas (tipo !== 'P' = não é produto-pai)
+  const produtosMonitorados = cacheProdutos.filter(p => {
+    const ref = extrairRef(p.descricao);
+    return ref && REFS_MONITORADAS.includes(ref) && p.tipo !== 'P';
   });
-}
 
-function formatarProdutoIndividual(p) {
-  let cor = "-", tam = "-";
-  let nomeLimpo = p.descricao || "Sem descrição";
-  const regexCor = /COR:\s*([^;]+)/i;
-  const matchCor = nomeLimpo.match(regexCor);
-  if (matchCor) { cor = matchCor[1].trim(); nomeLimpo = nomeLimpo.replace(regexCor, ""); }
-  const regexTam = /TAM(?:ANHO)?:\s*([^;]+)/i;
-  const matchTam = nomeLimpo.match(regexTam);
-  if (matchTam) { tam = matchTam[1].trim(); nomeLimpo = nomeLimpo.replace(regexTam, ""); }
-  nomeLimpo = nomeLimpo.replace(/;/g, "").replace(/\s{2,}/g, " ").trim();
-  let linhaEstoque = p.saldoFisicoTotal === 0 ? `🛑 *ESTOQUE ZERADO* ➔ Prioridade!` : `🟡 *Estoque Baixo:* Restam ${p.saldoFisicoTotal} un.`;
-  return `📦 *SKU:* ${p.codigo || "S/COD"}\n🏷️ *Produto:* ${nomeLimpo}\n🎨 *Cor:* ${cor}  |  📏 *Tam:* ${tam}\n${linhaEstoque}`;
-}
+  if (produtosMonitorados.length === 0) {
+    console.log('   [Alerta] Nenhum produto monitorado encontrado no cache.');
+    return;
+  }
 
-// WhatsApp verificação desativada temporariamente
-// async function executarVerificacao() { ... }
-// cron.schedule("0 * * * *", executarVerificacao, { timezone: "America/Sao_Paulo" });
+  console.log(`   [Alerta] Verificando ${produtosMonitorados.length} variações de ${REFS_MONITORADAS.length} referências...`);
+
+  // Busca saldos do depósito BASE (SEDE já está no cache)
+  let saldosBase = new Map();
+  try {
+    const token = await obterAccessToken();
+    const ids = produtosMonitorados.map(p => p.id);
+    saldosBase = await buscarSaldosPorDeposito(token, ids, DEPOSITO_BASE_ID);
+    console.log(`   [Alerta] Saldos BASE obtidos: ${saldosBase.size} produtos`);
+  } catch (e) {
+    console.error('   [Alerta] Erro ao buscar saldos BASE:', e.message);
+  }
+
+  // Monta lista de alertas
+  const alertas = [];
+
+  for (const p of produtosMonitorados) {
+    const saldoSede = p.saldoFisicoTotal || 0;
+    const saldoBase = saldosBase.get(p.id) || 0;
+
+    if (saldoSede < MINIMO_SEDE) {
+      alertas.push(formatarAlertaProduto(p, 'SEDE', saldoSede, MINIMO_SEDE));
+    }
+    if (saldoBase < MINIMO_BASE) {
+      alertas.push(formatarAlertaProduto(p, 'BASE', saldoBase, MINIMO_BASE));
+    }
+  }
+
+  if (alertas.length === 0) {
+    console.log('   [Alerta] ✅ Todos os estoques monitorados estão OK!');
+    ultimoAlertaHash = '';
+    return;
+  }
+
+  // Gera hash para detectar mudanças (evita enviar mensagem repetida)
+  const hashAtual = alertas.join('|||');
+  if (hashAtual === ultimoAlertaHash) {
+    console.log(`   [Alerta] Sem mudanças desde o último envio (${alertas.length} alertas). Não reenviando.`);
+    return;
+  }
+
+  console.log(`   [Alerta] 🔔 ${alertas.length} alerta(s) detectado(s)! Enviando no WhatsApp...`);
+
+  // Envia no grupo do WhatsApp
+  try {
+    const chats = await wppClient.getChats();
+    const grupo = chats.find(c => c.isGroup && c.name === CONFIG.whatsapp.nomeDoGrupo);
+
+    if (!grupo) {
+      console.error(`   [Alerta] ⚠️ Grupo "${CONFIG.whatsapp.nomeDoGrupo}" não encontrado! Verifique o nome.`);
+      return;
+    }
+
+    // Envia cabeçalho
+    const dataHora = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+    await grupo.sendMessage(`🔔 *ALERTA DE ESTOQUE — ${dataHora}*\n📊 ${alertas.length} item(ns) abaixo do mínimo`);
+    await delay(500);
+
+    // Envia cada produto como mensagem individual
+    for (const alerta of alertas) {
+      await grupo.sendMessage(alerta);
+      await delay(300); // Evita flood
+    }
+
+    ultimoAlertaHash = hashAtual;
+    console.log(`   [Alerta] ✅ ${alertas.length} mensagen(s) enviada(s) no grupo "${CONFIG.whatsapp.nomeDoGrupo}"`);
+  } catch (e) {
+    console.error('   [Alerta] ❌ Erro ao enviar no WhatsApp:', e.message);
+  }
+}
