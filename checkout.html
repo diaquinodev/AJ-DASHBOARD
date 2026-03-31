@@ -287,27 +287,41 @@
             atualizarListaInterface(); document.getElementById('input-produto').focus();
         }
 
+        // Remove zeros à esquerda para comparação de códigos numéricos
+        function semZerosEsquerda(str) {
+            const s = String(str).replace(/^0+/, '');
+            return s || '0';
+        }
+
         function conferirPeça(skuLido) {
             const skuTratado = String(skuLido).toLowerCase().trim();
+            const skuSemZeros = semZerosEsquerda(skuTratado);
+
+            // 1. Match exato por SKU
             let itemEncontrado = pedidoAtual.itens.find(i => String(i.sku).toLowerCase() === skuTratado);
 
-            // Tenta match por GTIN (código de barras) se não achou por SKU
+            // 2. Match por SKU ignorando zeros à esquerda (ex: bip "0000159083978" vs sku "159083978")
             if (!itemEncontrado) {
-                itemEncontrado = pedidoAtual.itens.find(i => i.gtin && String(i.gtin).toLowerCase() === skuTratado && i.conferido < i.esperado);
+                itemEncontrado = pedidoAtual.itens.find(i => semZerosEsquerda(String(i.sku).toLowerCase()) === skuSemZeros && i.conferido < i.esperado);
             }
 
-            // Tenta match por código Bling (etiquetas com código interno Bling)
+            // 3. Match por GTIN (código de barras)
             if (!itemEncontrado) {
-                itemEncontrado = pedidoAtual.itens.find(i => i.codigoBling && String(i.codigoBling).toLowerCase() === skuTratado && i.conferido < i.esperado);
+                itemEncontrado = pedidoAtual.itens.find(i => i.gtin && (String(i.gtin).toLowerCase() === skuTratado || semZerosEsquerda(String(i.gtin).toLowerCase()) === skuSemZeros) && i.conferido < i.esperado);
             }
 
-            // Auto-complete inteligente
+            // 4. Match por código Bling (etiquetas com código interno)
+            if (!itemEncontrado) {
+                itemEncontrado = pedidoAtual.itens.find(i => i.codigoBling && (String(i.codigoBling).toLowerCase() === skuTratado || semZerosEsquerda(String(i.codigoBling).toLowerCase()) === skuSemZeros) && i.conferido < i.esperado);
+            }
+
+            // 5. Auto-complete inteligente
             if (!itemEncontrado) {
                 const parciais = pedidoAtual.itens.filter(i => {
-                    const matchSku = String(i.sku).toLowerCase().includes(skuTratado);
+                    const matchSku = String(i.sku).toLowerCase().includes(skuTratado) || semZerosEsquerda(String(i.sku).toLowerCase()) === skuSemZeros;
                     const matchNome = String(i.nome).toLowerCase().includes(skuTratado);
-                    const matchGtin = i.gtin && String(i.gtin).toLowerCase().includes(skuTratado);
-                    const matchCodBling = i.codigoBling && String(i.codigoBling).toLowerCase().includes(skuTratado);
+                    const matchGtin = i.gtin && (String(i.gtin).toLowerCase().includes(skuTratado) || semZerosEsquerda(String(i.gtin).toLowerCase()) === skuSemZeros);
+                    const matchCodBling = i.codigoBling && (String(i.codigoBling).toLowerCase().includes(skuTratado) || semZerosEsquerda(String(i.codigoBling).toLowerCase()) === skuSemZeros);
                     return (matchSku || matchNome || matchGtin || matchCodBling) && i.conferido < i.esperado;
                 });
 

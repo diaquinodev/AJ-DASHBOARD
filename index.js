@@ -722,9 +722,14 @@ app.get('/api/checkout/pedido/:numero', async (req, res) => {
                 const cached = cacheProdutos.find(p => p.id === produtoId);
                 if (cached) gtin = cached.gtin || '';
             }
-            // Se não achou por ID, tenta por código
+            // Se não achou por ID, tenta por código (com e sem zeros à esquerda)
             if (!gtin && cacheProdutos) {
-                const cached = cacheProdutos.find(p => String(p.codigo).toLowerCase() === String(sku).toLowerCase());
+                const skuLower = String(sku).toLowerCase();
+                const skuSemZeros = skuLower.replace(/^0+/, '') || '0';
+                const cached = cacheProdutos.find(p => {
+                    const cod = String(p.codigo).toLowerCase();
+                    return cod === skuLower || cod.replace(/^0+/, '') === skuSemZeros;
+                });
                 if (cached) gtin = cached.gtin || '';
             }
             return {
