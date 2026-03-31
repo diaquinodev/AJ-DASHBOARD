@@ -630,18 +630,49 @@ app.get('/api/checkout/pedido/:numero', async (req, res) => {
     const itensCSV = bancoDadosPlanilha.filter(i => i.pedido === numero);
     if (itensCSV.length > 0) {
         console.log(`✅ [Checkout] Pedido ${numero} encontrado na Planilha!`);
+
+        // Constrói mapa de matching Bling para resolver códigos de barras
+        let mapaBling = null;
+        if (cacheProdutos && cacheProdutos.length > 0) {
+            mapaBling = construirMapaBling(cacheProdutos);
+            console.log(`   [Checkout-Planilha] Mapa Bling: ${mapaBling.size} variações para matching de barcode`);
+        }
+
         const mapaItens = new Map();
         for (const i of itensCSV) {
             if (mapaItens.has(i.sku)) {
                 mapaItens.get(i.sku).esperado += i.qtd;
             } else {
-                // Busca GTIN no cache para permitir conferência por código de barras
+                // Resolve código Bling + GTIN usando matching inteligente (SKU UpSeller → produto Bling)
                 let gtin = '';
+                let codigoBling = '';
+                let produtoId = null;
+
+                // 1º Tenta match direto pelo código no cache
                 if (cacheProdutos) {
                     const cached = cacheProdutos.find(p => String(p.codigo).toLowerCase() === String(i.sku).toLowerCase());
-                    if (cached) gtin = cached.gtin || '';
+                    if (cached) {
+                        gtin = cached.gtin || '';
+                        codigoBling = cached.codigo || '';
+                        produtoId = cached.id || null;
+                    }
                 }
-                mapaItens.set(i.sku, { sku: i.sku, gtin, nome: i.nome, esperado: i.qtd, conferido: 0 });
+
+                // 2º Se não achou, usa matching inteligente (parseUpSellerSku → buscarNoMapaBling)
+                if (!codigoBling && mapaBling) {
+                    const parsed = parseUpSellerSku(i.sku);
+                    if (parsed) {
+                        const produtoBling = buscarNoMapaBling(mapaBling, parsed.ref, parsed.cor, parsed.tam);
+                        if (produtoBling) {
+                            gtin = produtoBling.gtin || '';
+                            codigoBling = produtoBling.codigo || '';
+                            produtoId = produtoBling.id || null;
+                            console.log(`   🔗 "${i.sku}" → Bling: "${produtoBling.descricao}" (cod: ${codigoBling}, gtin: ${gtin || 'vazio'})`);
+                        }
+                    }
+                }
+
+                mapaItens.set(i.sku, { sku: i.sku, gtin, codigoBling, produtoId, nome: i.nome, esperado: i.qtd, conferido: 0 });
             }
         }
         return res.json({ origem: 'PLANILHA', numero: numero, itens: Array.from(mapaItens.values()) });

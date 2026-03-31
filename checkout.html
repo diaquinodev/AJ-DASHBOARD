@@ -296,13 +296,19 @@
                 itemEncontrado = pedidoAtual.itens.find(i => i.gtin && String(i.gtin).toLowerCase() === skuTratado && i.conferido < i.esperado);
             }
 
+            // Tenta match por código Bling (etiquetas com código interno Bling)
+            if (!itemEncontrado) {
+                itemEncontrado = pedidoAtual.itens.find(i => i.codigoBling && String(i.codigoBling).toLowerCase() === skuTratado && i.conferido < i.esperado);
+            }
+
             // Auto-complete inteligente
             if (!itemEncontrado) {
                 const parciais = pedidoAtual.itens.filter(i => {
                     const matchSku = String(i.sku).toLowerCase().includes(skuTratado);
                     const matchNome = String(i.nome).toLowerCase().includes(skuTratado);
                     const matchGtin = i.gtin && String(i.gtin).toLowerCase().includes(skuTratado);
-                    return (matchSku || matchNome || matchGtin) && i.conferido < i.esperado;
+                    const matchCodBling = i.codigoBling && String(i.codigoBling).toLowerCase().includes(skuTratado);
+                    return (matchSku || matchNome || matchGtin || matchCodBling) && i.conferido < i.esperado;
                 });
 
                 if (parciais.length === 1) {
