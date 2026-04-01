@@ -2007,23 +2007,30 @@ wppClient.on("disconnected", (reason) => {
 });
 
 // 📩 Listener de comandos no grupo WhatsApp (registrado ANTES do initialize)
+let _processandoComando = false;
 wppClient.on('message_create', async (msg) => {
   try {
-    if (msg.fromMe) return;
-
-    const chat = await msg.getChat();
-    if (!chat.isGroup || chat.name !== CONFIG.whatsapp.nomeDoGrupo) return;
+    // Ignora mensagens que não são de texto ou estão vazias
+    if (!msg.body || msg.body.trim() === '') return;
 
     const texto = msg.body.trim().toLowerCase();
     if (!texto.startsWith('!estoque')) return;
+
+    // Evita reprocessamento se já está executando um comando
+    if (_processandoComando) return;
+
+    const chat = await msg.getChat();
+    if (!chat.isGroup || chat.name !== CONFIG.whatsapp.nomeDoGrupo) return;
 
     const partes = texto.split(/\s+/);
     const arg = partes[1] || null;
 
     console.log(`\n📩 [WhatsApp] Comando recebido: "${msg.body}"`);
+    _processandoComando = true;
 
     if (!cacheProdutos || cacheProdutos.length === 0) {
       await chat.sendMessage('⚠️ Cache de produtos vazio. Aguarde a sincronização.');
+      _processandoComando = false;
       return;
     }
 
@@ -2038,6 +2045,7 @@ wppClient.on('message_create', async (msg) => {
     // Valida referência
     if (filtroRef && !REFS_MONITORADAS.includes(filtroRef)) {
       await chat.sendMessage(`⚠️ Referência "${filtroRef}" não monitorada.\n\n📋 *Refs:* ${REFS_MONITORADAS.join(', ')}`);
+      _processandoComando = false;
       return;
     }
 
@@ -2067,6 +2075,8 @@ wppClient.on('message_create', async (msg) => {
     console.log(`   [WhatsApp] ✅ Comando processado. SEDE: ${conjuntosSede.length} conjuntos | BASE: ${conjuntosBase.length} conjuntos`);
   } catch (e) {
     console.error('   [WhatsApp] Erro ao processar comando:', e.message);
+  } finally {
+    _processandoComando = false;
   }
 });
 
@@ -2129,7 +2139,6 @@ async function buscarSaldosPorDeposito(token, produtoIds, depositoId) {
   return mapa;
 }
 
-// Formata linha de alerta para um produto
 // Formata bloco de um conjunto (referência) com todas suas variações em alerta
 function formatarBlocoConjunto(ref, nomeProduto, variacoes) {
   let bloco = `📦 *${ref} – ${nomeProduto}*\n`;
