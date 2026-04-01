@@ -246,9 +246,6 @@ async function sincronizarCatalogoEmSegundoPlano() {
     ultimoCacheHora = Date.now();
     salvarCatalogoNoDisco(produtos);
     console.log(`   [Sync] Sincronização concluída! ${produtos.length} produtos atualizados.`);
-
-    // Dispara verificação de estoque após sincronizar
-    verificarEstoqueEAlertar().catch(e => console.error('   [Alerta] Erro:', e.message));
   } catch (e) {
     console.error("   [Sync] Falha na sincronização:", e.message);
   } finally {
@@ -2031,7 +2028,7 @@ wppClient.on('message_create', async (msg) => {
     }
 
     // Determina filtro
-    let filtroDeposito = null; // null = ambos, 'sede', 'base'
+    let filtroDeposito = null;
     let filtroRef = null;
 
     if (arg === 'sede') filtroDeposito = 'sede';
@@ -2044,29 +2041,30 @@ wppClient.on('message_create', async (msg) => {
       return;
     }
 
-    // Gera alertas
-    const { alertasSede, alertasBase } = await gerarAlertas(filtroRef);
+    await chat.sendMessage(`⏳ Consultando estoque...`);
 
+    // Gera alertas agrupados por conjunto
+    const { conjuntosSede, conjuntosBase } = await gerarAlertasPorConjunto(filtroRef, filtroDeposito);
     const dataHora = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
 
     if (!filtroDeposito || filtroDeposito === 'sede') {
-      if (alertasSede.length > 0) {
-        await enviarAlertasAgrupados(chat, `🏢 *ESTOQUE SEDE — ${dataHora}*\n📊 ${alertasSede.length} item(ns) abaixo de ${MINIMO_SEDE}`, alertasSede);
+      if (conjuntosSede.length > 0) {
+        await enviarPorLotes(chat, `🏢 *ESTOQUE SEDE — ${dataHora}*\n📊 ${conjuntosSede.length} conjunto(s) abaixo de ${MINIMO_SEDE} pçs/variação`, conjuntosSede);
       } else {
         await chat.sendMessage(`✅ *SEDE:* Todos os estoques monitorados OK!`);
       }
-      await delay(1000);
+      if (!filtroDeposito) await delay(2000);
     }
 
     if (!filtroDeposito || filtroDeposito === 'base') {
-      if (alertasBase.length > 0) {
-        await enviarAlertasAgrupados(chat, `🏭 *ESTOQUE BASE — ${dataHora}*\n📊 ${alertasBase.length} item(ns) abaixo de ${MINIMO_BASE}`, alertasBase);
+      if (conjuntosBase.length > 0) {
+        await enviarPorLotes(chat, `🏭 *ESTOQUE BASE — ${dataHora}*\n📊 ${conjuntosBase.length} conjunto(s) abaixo de ${MINIMO_BASE} pçs/variação`, conjuntosBase);
       } else {
         await chat.sendMessage(`✅ *BASE:* Todos os estoques monitorados OK!`);
       }
     }
 
-    console.log(`   [WhatsApp] ✅ Comando processado. SEDE: ${alertasSede.length} | BASE: ${alertasBase.length}`);
+    console.log(`   [WhatsApp] ✅ Comando processado. SEDE: ${conjuntosSede.length} conjuntos | BASE: ${conjuntosBase.length} conjuntos`);
   } catch (e) {
     console.error('   [WhatsApp] Erro ao processar comando:', e.message);
   }
@@ -2132,31 +2130,19 @@ async function buscarSaldosPorDeposito(token, produtoIds, depositoId) {
 }
 
 // Formata linha de alerta para um produto
-function formatarLinhaAlerta(produto, saldo, minimo) {
-  const { cor, tam } = extrairCorTam(produto.descricao);
-  const nomeLimpo = extrairNomeLimpo(produto.descricao);
-  const icone = saldo === 0 ? '🚨' : '⚠️';
-  const status = saldo === 0 ? 'ZERADO → Prioridade!' : `${saldo} pçs (mín: ${minimo})`;
-  return `${icone} *${nomeLimpo}*\n🎨 Cor: ${cor}  |  👗 Tam: ${tam}\n📊 Estoque: *${status}*`;
-}
-
-// Agrupa alertas em blocos de até 10 produtos por mensagem (evita flood)
-async function enviarAlertasAgrupados(chat, cabecalho, linhas) {
-  const BLOCO = 10;
-  await chat.sendMessage(cabecalho);
-  await delay(500);
-
-  for (let i = 0; i < linhas.length; i += BLOCO) {
-    const bloco = linhas.slice(i, i + BLOCO);
-    const msg = bloco.join('\n\n━━━━━━━━━━━━━━━━━━\n\n');
-    await chat.sendMessage(msg);
-    await delay(500);
+// Formata bloco de um conjunto (referência) com todas suas variações em alerta
+function formatarBlocoConjunto(ref, nomeProduto, variacoes) {
+  let bloco = `📦 *${ref} – ${nomeProduto}*\n`;
+  for (const v of variacoes) {
+    const icone = v.saldo === 0 ? '🚨' : '⚠️';
+    const status = v.saldo === 0 ? 'ZERADO' : `${v.saldo} pçs`;
+    bloco += `${icone} ${v.cor} | ${v.tam} → *${status}*\n`;
   }
+  return bloco.trim();
 }
 
-// Gera listas de alertas separadas por depósito
-async function gerarAlertas(filtroRef) {
-  // Filtra variações monitoradas
+// Gera alertas agrupados por referência (conjunto), separados por depósito
+async function gerarAlertasPorConjunto(filtroRef, filtroDeposito) {
   const produtosMonitorados = cacheProdutos.filter(p => {
     const ref = extrairRef(p.descricao);
     if (!ref) return false;
@@ -2165,9 +2151,13 @@ async function gerarAlertas(filtroRef) {
     return REFS_MONITORADAS.includes(ref);
   });
 
-  // Busca saldos BASE
+  if (produtosMonitorados.length === 0) {
+    return { conjuntosSede: [], conjuntosBase: [] };
+  }
+
+  // Busca saldos BASE se necessário
   let saldosBase = new Map();
-  if (produtosMonitorados.length > 0) {
+  if (!filtroDeposito || filtroDeposito === 'base') {
     try {
       const token = await obterAccessToken();
       saldosBase = await buscarSaldosPorDeposito(token, produtosMonitorados.map(p => p.id), DEPOSITO_BASE_ID);
@@ -2176,75 +2166,53 @@ async function gerarAlertas(filtroRef) {
     }
   }
 
-  const alertasSede = [];
-  const alertasBase = [];
+  // Agrupa por referência
+  const mapaSede = new Map(); // ref → { nome, variacoes[] }
+  const mapaBase = new Map();
 
   for (const p of produtosMonitorados) {
+    const ref = extrairRef(p.descricao);
+    const { cor, tam } = extrairCorTam(p.descricao);
+    const nomeLimpo = extrairNomeLimpo(p.descricao).replace(/^\d+[-\s]*/, '').trim();
     const saldoSede = p.saldoFisicoTotal || 0;
     const saldoBase = saldosBase.get(p.id) || 0;
 
-    if (saldoSede < MINIMO_SEDE) {
-      alertasSede.push(formatarLinhaAlerta(p, saldoSede, MINIMO_SEDE));
+    if ((!filtroDeposito || filtroDeposito === 'sede') && saldoSede < MINIMO_SEDE) {
+      if (!mapaSede.has(ref)) mapaSede.set(ref, { nome: nomeLimpo, variacoes: [] });
+      mapaSede.get(ref).variacoes.push({ cor, tam, saldo: saldoSede });
     }
-    if (saldoBase < MINIMO_BASE) {
-      alertasBase.push(formatarLinhaAlerta(p, saldoBase, MINIMO_BASE));
+    if ((!filtroDeposito || filtroDeposito === 'base') && saldoBase < MINIMO_BASE) {
+      if (!mapaBase.has(ref)) mapaBase.set(ref, { nome: nomeLimpo, variacoes: [] });
+      mapaBase.get(ref).variacoes.push({ cor, tam, saldo: saldoBase });
     }
   }
 
-  return { alertasSede, alertasBase };
+  // Converte para array de blocos formatados
+  const conjuntosSede = [];
+  for (const [ref, dados] of mapaSede) {
+    conjuntosSede.push(formatarBlocoConjunto(ref, dados.nome, dados.variacoes));
+  }
+
+  const conjuntosBase = [];
+  for (const [ref, dados] of mapaBase) {
+    conjuntosBase.push(formatarBlocoConjunto(ref, dados.nome, dados.variacoes));
+  }
+
+  return { conjuntosSede, conjuntosBase };
 }
 
-// Verificação automática (a cada 30 min após sync) — envia SEDE e BASE separados
-async function verificarEstoqueEAlertar() {
-  if (!cacheProdutos || cacheProdutos.length === 0) {
-    console.log('   [Alerta] Cache vazio, pulando verificação.');
-    return;
-  }
+// Envia conjuntos em lotes de 5 referências por mensagem, com pausa entre lotes
+async function enviarPorLotes(chat, cabecalho, conjuntos) {
+  const LOTE = 5;
+  await chat.sendMessage(cabecalho);
+  await delay(800);
 
-  console.log(`   [Alerta] Verificando estoque das ${REFS_MONITORADAS.length} referências monitoradas...`);
-
-  const { alertasSede, alertasBase } = await gerarAlertas(null);
-  const totalAlertas = alertasSede.length + alertasBase.length;
-
-  if (totalAlertas === 0) {
-    console.log('   [Alerta] ✅ Todos os estoques monitorados estão OK!');
-    ultimoAlertaHash = '';
-    return;
-  }
-
-  // Detecta mudanças
-  const hashAtual = [...alertasSede, '---', ...alertasBase].join('|||');
-  if (hashAtual === ultimoAlertaHash) {
-    console.log(`   [Alerta] Sem mudanças desde o último envio (${totalAlertas} alertas). Não reenviando.`);
-    return;
-  }
-
-  console.log(`   [Alerta] 🔔 ${totalAlertas} alerta(s)! SEDE: ${alertasSede.length} | BASE: ${alertasBase.length}`);
-
-  try {
-    const chats = await wppClient.getChats();
-    const grupo = chats.find(c => c.isGroup && c.name === CONFIG.whatsapp.nomeDoGrupo);
-    if (!grupo) {
-      console.error(`   [Alerta] ⚠️ Grupo "${CONFIG.whatsapp.nomeDoGrupo}" não encontrado!`);
-      return;
-    }
-
-    const dataHora = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
-
-    // Envia SEDE
-    if (alertasSede.length > 0) {
-      await enviarAlertasAgrupados(grupo, `🏢 *ALERTA SEDE — ${dataHora}*\n📊 ${alertasSede.length} item(ns) abaixo de ${MINIMO_SEDE}`, alertasSede);
-      await delay(1000);
-    }
-
-    // Envia BASE
-    if (alertasBase.length > 0) {
-      await enviarAlertasAgrupados(grupo, `🏭 *ALERTA BASE — ${dataHora}*\n📊 ${alertasBase.length} item(ns) abaixo de ${MINIMO_BASE}`, alertasBase);
-    }
-
-    ultimoAlertaHash = hashAtual;
-    console.log(`   [Alerta] ✅ Alertas enviados no grupo.`);
-  } catch (e) {
-    console.error('   [Alerta] ❌ Erro ao enviar no WhatsApp:', e.message);
+  for (let i = 0; i < conjuntos.length; i += LOTE) {
+    const lote = conjuntos.slice(i, i + LOTE);
+    const msg = lote.join('\n\n━━━━━━━━━━━━━━━━━━\n\n');
+    const pagina = Math.floor(i / LOTE) + 1;
+    const totalPaginas = Math.ceil(conjuntos.length / LOTE);
+    await chat.sendMessage(`📄 *${pagina}/${totalPaginas}*\n\n${msg}`);
+    await delay(2000); // 2 segundos entre lotes
   }
 }
