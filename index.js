@@ -2012,7 +2012,6 @@ wppClient.on("disconnected", (reason) => {
 // 📩 Listener de comandos no grupo WhatsApp (registrado ANTES do initialize)
 wppClient.on('message_create', async (msg) => {
   try {
-    // Ignora mensagens enviadas pelo próprio bot
     if (msg.fromMe) return;
 
     const chat = await msg.getChat();
@@ -2022,40 +2021,52 @@ wppClient.on('message_create', async (msg) => {
     if (!texto.startsWith('!estoque')) return;
 
     const partes = texto.split(/\s+/);
-    const filtro = partes[1] || null; // null = todos, 'sede', 'base', ou número de ref
+    const arg = partes[1] || null;
 
-    console.log(`\n📩 [WhatsApp] Comando recebido: "${msg.body}" | Filtro: ${filtro || 'todos'}`);
+    console.log(`\n📩 [WhatsApp] Comando recebido: "${msg.body}"`);
 
     if (!cacheProdutos || cacheProdutos.length === 0) {
       await chat.sendMessage('⚠️ Cache de produtos vazio. Aguarde a sincronização.');
       return;
     }
 
-    // Gera alertas com filtro
-    const resultado = await gerarAlertasFiltrados(filtro);
+    // Determina filtro
+    let filtroDeposito = null; // null = ambos, 'sede', 'base'
+    let filtroRef = null;
 
-    if (resultado.erro) {
-      await chat.sendMessage(resultado.erro);
+    if (arg === 'sede') filtroDeposito = 'sede';
+    else if (arg === 'base') filtroDeposito = 'base';
+    else if (arg) filtroRef = arg;
+
+    // Valida referência
+    if (filtroRef && !REFS_MONITORADAS.includes(filtroRef)) {
+      await chat.sendMessage(`⚠️ Referência "${filtroRef}" não monitorada.\n\n📋 *Refs:* ${REFS_MONITORADAS.join(', ')}`);
       return;
     }
 
-    if (resultado.alertas.length === 0) {
-      await chat.sendMessage(`✅ ${resultado.mensagemOk}`);
-      return;
-    }
+    // Gera alertas
+    const { alertasSede, alertasBase } = await gerarAlertas(filtroRef);
 
-    // Envia cabeçalho
     const dataHora = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
-    await chat.sendMessage(`🔔 *CONSULTA DE ESTOQUE — ${dataHora}*\n🔎 Filtro: *${resultado.filtroLabel}*\n📊 ${resultado.alertas.length} item(ns) abaixo do mínimo`);
-    await delay(500);
 
-    // Envia cada produto como mensagem individual
-    for (const alerta of resultado.alertas) {
-      await chat.sendMessage(alerta);
-      await delay(300);
+    if (!filtroDeposito || filtroDeposito === 'sede') {
+      if (alertasSede.length > 0) {
+        await enviarAlertasAgrupados(chat, `🏢 *ESTOQUE SEDE — ${dataHora}*\n📊 ${alertasSede.length} item(ns) abaixo de ${MINIMO_SEDE}`, alertasSede);
+      } else {
+        await chat.sendMessage(`✅ *SEDE:* Todos os estoques monitorados OK!`);
+      }
+      await delay(1000);
     }
 
-    console.log(`   [WhatsApp] ✅ ${resultado.alertas.length} alerta(s) enviado(s) via comando.`);
+    if (!filtroDeposito || filtroDeposito === 'base') {
+      if (alertasBase.length > 0) {
+        await enviarAlertasAgrupados(chat, `🏭 *ESTOQUE BASE — ${dataHora}*\n📊 ${alertasBase.length} item(ns) abaixo de ${MINIMO_BASE}`, alertasBase);
+      } else {
+        await chat.sendMessage(`✅ *BASE:* Todos os estoques monitorados OK!`);
+      }
+    }
+
+    console.log(`   [WhatsApp] ✅ Comando processado. SEDE: ${alertasSede.length} | BASE: ${alertasBase.length}`);
   } catch (e) {
     console.error('   [WhatsApp] Erro ao processar comando:', e.message);
   }
@@ -2120,49 +2131,43 @@ async function buscarSaldosPorDeposito(token, produtoIds, depositoId) {
   return mapa;
 }
 
-// Formata mensagem individual de alerta para um produto
-function formatarAlertaProduto(produto, deposito, saldo, minimo) {
+// Formata linha de alerta para um produto
+function formatarLinhaAlerta(produto, saldo, minimo) {
   const { cor, tam } = extrairCorTam(produto.descricao);
   const nomeLimpo = extrairNomeLimpo(produto.descricao);
-
-  let linhaEstoque;
-  if (saldo === 0) {
-    linhaEstoque = `🚨 *ESTOQUE ZERADO* → Prioridade!`;
-  } else {
-    linhaEstoque = `⚠️ *${deposito}:* ${saldo} peças (mín: ${minimo}) → Repor!`;
-  }
-
-  return `📦 *SKU:* ${produto.codigo || 'S/COD'}\n🏷️ *Produto:* ${nomeLimpo}\n🎨 *Cor:* ${cor}  |  👗 *Tam:* ${tam}\n${linhaEstoque}`;
+  const icone = saldo === 0 ? '🚨' : '⚠️';
+  const status = saldo === 0 ? 'ZERADO → Prioridade!' : `${saldo} pçs (mín: ${minimo})`;
+  return `${icone} *${nomeLimpo}*\n🎨 Cor: ${cor}  |  👗 Tam: ${tam}\n📊 Estoque: *${status}*`;
 }
 
-// Função principal: verifica estoque e envia alertas no WhatsApp
-// Gera lista de alertas com filtro opcional (null=todos, 'sede', 'base', ou número de ref)
-async function gerarAlertasFiltrados(filtro) {
-  const filtroDeposito = (filtro === 'sede' || filtro === 'base') ? filtro : null;
-  const filtroRef = filtro && !filtroDeposito ? filtro : null;
+// Agrupa alertas em blocos de até 10 produtos por mensagem (evita flood)
+async function enviarAlertasAgrupados(chat, cabecalho, linhas) {
+  const BLOCO = 10;
+  await chat.sendMessage(cabecalho);
+  await delay(500);
 
-  // Valida referência se informada
-  if (filtroRef && !REFS_MONITORADAS.includes(filtroRef)) {
-    return { erro: `⚠️ Referência "${filtroRef}" não está na lista monitorada.\n\n📋 *Refs monitoradas:*\n${REFS_MONITORADAS.join(', ')}` };
+  for (let i = 0; i < linhas.length; i += BLOCO) {
+    const bloco = linhas.slice(i, i + BLOCO);
+    const msg = bloco.join('\n\n━━━━━━━━━━━━━━━━━━\n\n');
+    await chat.sendMessage(msg);
+    await delay(500);
   }
+}
 
-  // Filtra variações monitoradas (só inclui produtos com COR na descrição = variações reais)
+// Gera listas de alertas separadas por depósito
+async function gerarAlertas(filtroRef) {
+  // Filtra variações monitoradas
   const produtosMonitorados = cacheProdutos.filter(p => {
     const ref = extrairRef(p.descricao);
     if (!ref) return false;
-    // Ignora produtos-pai sem cor (não são variações individuais)
     if (!(p.descricao || '').match(/COR:/i)) return false;
     if (filtroRef) return ref === filtroRef;
     return REFS_MONITORADAS.includes(ref);
   });
 
-  if (produtosMonitorados.length === 0) {
-    return { erro: '⚠️ Nenhum produto monitorado encontrado no cache.' };
-  }
-
-  // Busca saldos BASE (SEDE já está no cache)
+  // Busca saldos BASE
   let saldosBase = new Map();
-  if (!filtroDeposito || filtroDeposito === 'base') {
+  if (produtosMonitorados.length > 0) {
     try {
       const token = await obterAccessToken();
       saldosBase = await buscarSaldosPorDeposito(token, produtosMonitorados.map(p => p.id), DEPOSITO_BASE_ID);
@@ -2171,36 +2176,25 @@ async function gerarAlertasFiltrados(filtro) {
     }
   }
 
-  // Monta alertas
-  const alertas = [];
+  const alertasSede = [];
+  const alertasBase = [];
+
   for (const p of produtosMonitorados) {
     const saldoSede = p.saldoFisicoTotal || 0;
     const saldoBase = saldosBase.get(p.id) || 0;
 
-    if ((!filtroDeposito || filtroDeposito === 'sede') && saldoSede < MINIMO_SEDE) {
-      alertas.push(formatarAlertaProduto(p, 'SEDE', saldoSede, MINIMO_SEDE));
+    if (saldoSede < MINIMO_SEDE) {
+      alertasSede.push(formatarLinhaAlerta(p, saldoSede, MINIMO_SEDE));
     }
-    if ((!filtroDeposito || filtroDeposito === 'base') && saldoBase < MINIMO_BASE) {
-      alertas.push(formatarAlertaProduto(p, 'BASE', saldoBase, MINIMO_BASE));
+    if (saldoBase < MINIMO_BASE) {
+      alertasBase.push(formatarLinhaAlerta(p, saldoBase, MINIMO_BASE));
     }
   }
 
-  // Label do filtro para o cabeçalho
-  let filtroLabel = 'SEDE + BASE (todos)';
-  if (filtroDeposito === 'sede') filtroLabel = 'Somente SEDE (mín: 30)';
-  else if (filtroDeposito === 'base') filtroLabel = 'Somente BASE (mín: 60)';
-  else if (filtroRef) filtroLabel = `Referência ${filtroRef}`;
-
-  const mensagemOk = filtroRef
-    ? `Ref ${filtroRef}: todos os estoques OK!`
-    : filtroDeposito
-      ? `${filtroDeposito.toUpperCase()}: todos os estoques monitorados OK!`
-      : 'Todos os estoques monitorados estão OK!';
-
-  return { alertas, filtroLabel, mensagemOk };
+  return { alertasSede, alertasBase };
 }
 
-// Verificação automática (chamada a cada 30 min após sync)
+// Verificação automática (a cada 30 min após sync) — envia SEDE e BASE separados
 async function verificarEstoqueEAlertar() {
   if (!cacheProdutos || cacheProdutos.length === 0) {
     console.log('   [Alerta] Cache vazio, pulando verificação.');
@@ -2209,25 +2203,23 @@ async function verificarEstoqueEAlertar() {
 
   console.log(`   [Alerta] Verificando estoque das ${REFS_MONITORADAS.length} referências monitoradas...`);
 
-  const resultado = await gerarAlertasFiltrados(null);
-  if (resultado.erro) { console.log(`   [Alerta] ${resultado.erro}`); return; }
+  const { alertasSede, alertasBase } = await gerarAlertas(null);
+  const totalAlertas = alertasSede.length + alertasBase.length;
 
-  const alertas = resultado.alertas;
-
-  if (alertas.length === 0) {
+  if (totalAlertas === 0) {
     console.log('   [Alerta] ✅ Todos os estoques monitorados estão OK!');
     ultimoAlertaHash = '';
     return;
   }
 
   // Detecta mudanças
-  const hashAtual = alertas.join('|||');
+  const hashAtual = [...alertasSede, '---', ...alertasBase].join('|||');
   if (hashAtual === ultimoAlertaHash) {
-    console.log(`   [Alerta] Sem mudanças desde o último envio (${alertas.length} alertas). Não reenviando.`);
+    console.log(`   [Alerta] Sem mudanças desde o último envio (${totalAlertas} alertas). Não reenviando.`);
     return;
   }
 
-  console.log(`   [Alerta] 🔔 ${alertas.length} alerta(s) detectado(s)! Enviando no WhatsApp...`);
+  console.log(`   [Alerta] 🔔 ${totalAlertas} alerta(s)! SEDE: ${alertasSede.length} | BASE: ${alertasBase.length}`);
 
   try {
     const chats = await wppClient.getChats();
@@ -2238,16 +2230,20 @@ async function verificarEstoqueEAlertar() {
     }
 
     const dataHora = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
-    await grupo.sendMessage(`🔔 *ALERTA DE ESTOQUE — ${dataHora}*\n📊 ${alertas.length} item(ns) abaixo do mínimo`);
-    await delay(500);
 
-    for (const alerta of alertas) {
-      await grupo.sendMessage(alerta);
-      await delay(300);
+    // Envia SEDE
+    if (alertasSede.length > 0) {
+      await enviarAlertasAgrupados(grupo, `🏢 *ALERTA SEDE — ${dataHora}*\n📊 ${alertasSede.length} item(ns) abaixo de ${MINIMO_SEDE}`, alertasSede);
+      await delay(1000);
+    }
+
+    // Envia BASE
+    if (alertasBase.length > 0) {
+      await enviarAlertasAgrupados(grupo, `🏭 *ALERTA BASE — ${dataHora}*\n📊 ${alertasBase.length} item(ns) abaixo de ${MINIMO_BASE}`, alertasBase);
     }
 
     ultimoAlertaHash = hashAtual;
-    console.log(`   [Alerta] ✅ ${alertas.length} mensagen(s) enviada(s) no grupo.`);
+    console.log(`   [Alerta] ✅ Alertas enviados no grupo.`);
   } catch (e) {
     console.error('   [Alerta] ❌ Erro ao enviar no WhatsApp:', e.message);
   }
