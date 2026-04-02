@@ -2202,8 +2202,9 @@ function formatarEstoqueSede(nomeProduto, ref, porTamanho) {
   });
 
   for (const tam of tamanhos) {
+    const cores = porTamanho.get(tam).filter(v => v.saldo > 0).sort((a, b) => a.cor.localeCompare(b.cor));
+    if (cores.length === 0) continue;
     msg += `\n${tam}\n`;
-    const cores = porTamanho.get(tam).sort((a, b) => a.cor.localeCompare(b.cor));
     for (const { cor, saldo } of cores) {
       msg += `${cor} ${saldo}\n`;
     }
