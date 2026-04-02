@@ -31,7 +31,8 @@ const CONFIG = {
     tokenFile    : path.join(__dirname, "tokens.json"),
   },
   whatsapp: {
-    nomeDoGrupo: "Estoque Marketplace"
+    nomeDoGrupo: "Estoque Marketplace",
+    nomeDoGrupoSede: "Sede Giovana"
   },
   limiteMin: 0,
   limiteMax: 10,
@@ -2010,27 +2011,57 @@ wppClient.on("disconnected", (reason) => {
 let _processandoComando = false;
 wppClient.on('message_create', async (msg) => {
   try {
-    // Ignora mensagens que não são de texto ou estão vazias
     if (!msg.body || msg.body.trim() === '') return;
 
     const texto = msg.body.trim().toLowerCase();
     if (!texto.startsWith('!estoque')) return;
 
-    // Evita reprocessamento se já está executando um comando
     if (_processandoComando) return;
 
     const chat = await msg.getChat();
-    if (!chat.isGroup || chat.name !== CONFIG.whatsapp.nomeDoGrupo) return;
+    if (!chat.isGroup) return;
 
     const partes = texto.split(/\s+/);
     const arg = partes[1] || null;
+
+    // ─────────────────────────────────────────────────────────
+    // 🏪 GRUPO "Sede Giovana" — consulta em TEMPO REAL na API
+    // ─────────────────────────────────────────────────────────
+    if (chat.name === CONFIG.whatsapp.nomeDoGrupoSede) {
+      if (!arg) {
+        await chat.sendMessage('📋 *Uso:* !estoque <referência>\nEx: !estoque 180');
+        return;
+      }
+
+      console.log(`\n📩 [WhatsApp/Sede] Comando recebido: "${msg.body}" — ref: ${arg}`);
+      _processandoComando = true;
+
+      await chat.sendMessage(`⏳ Consultando estoque ref ${arg} em tempo real...`);
+
+      const resultado = await buscarEstoqueBlingTempoReal(arg);
+
+      if (!resultado) {
+        await chat.sendMessage(`⚠️ Nenhuma variação encontrada para referência "${arg}".`);
+        return;
+      }
+
+      const mensagem = formatarEstoqueSede(resultado.nomeProduto, resultado.referencia, resultado.porTamanho);
+      await chat.sendMessage(mensagem);
+
+      console.log(`   [WhatsApp/Sede] ✅ Ref ${arg}: ${resultado.totalVariacoes} variações enviadas.`);
+      return;
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // 📦 GRUPO "Estoque Marketplace" — consulta via cache
+    // ─────────────────────────────────────────────────────────
+    if (chat.name !== CONFIG.whatsapp.nomeDoGrupo) return;
 
     console.log(`\n📩 [WhatsApp] Comando recebido: "${msg.body}"`);
     _processandoComando = true;
 
     if (!cacheProdutos || cacheProdutos.length === 0) {
       await chat.sendMessage('⚠️ Cache de produtos vazio. Aguarde a sincronização.');
-      _processandoComando = false;
       return;
     }
 
@@ -2045,7 +2076,6 @@ wppClient.on('message_create', async (msg) => {
     // Valida referência
     if (filtroRef && !REFS_MONITORADAS.includes(filtroRef)) {
       await chat.sendMessage(`⚠️ Referência "${filtroRef}" não monitorada.\n\n📋 *Refs:* ${REFS_MONITORADAS.join(', ')}`);
-      _processandoComando = false;
       return;
     }
 
@@ -2081,6 +2111,106 @@ wppClient.on('message_create', async (msg) => {
 });
 
 wppClient.initialize();
+
+// ══════════════════════════════════════════════════
+// 🏪 SEDE GIOVANA — BUSCA DE ESTOQUE EM TEMPO REAL
+// ══════════════════════════════════════════════════
+
+// Busca estoque direto na API do Bling (sem cache) para uma referência específica
+async function buscarEstoqueBlingTempoReal(referencia) {
+  const token = await obterAccessToken();
+
+  // 1) Busca produtos cuja descrição começa com a referência
+  const todosProdutos = [];
+  let pagina = 1;
+  let temMais = true;
+
+  while (temMais) {
+    const resp = await blingRequest("https://www.bling.com.br/Api/v3/produtos", token, {
+      nome: `${referencia}-`,
+      tipo: 'T',
+      limite: 100,
+      pagina
+    });
+    const data = resp.data?.data ?? [];
+    todosProdutos.push(...data);
+    if (data.length < 100) temMais = false;
+    else pagina++;
+    if (temMais) await delay(500);
+  }
+
+  // 2) Filtra: somente variações da referência exata (com COR: na descrição)
+  const variacoes = todosProdutos.filter(p => {
+    const desc = p.nome || p.descricao || '';
+    const ref = extrairRef(desc);
+    return ref === referencia && /COR:/i.test(desc);
+  });
+
+  if (variacoes.length === 0) return null;
+
+  // 3) Busca saldos do depósito SEDE em tempo real
+  const saldoMap = new Map();
+  for (let i = 0; i < variacoes.length; i += 50) {
+    const batch = variacoes.slice(i, i + 50);
+    const params = new URLSearchParams();
+    for (const p of batch) params.append('idsProdutos[]', p.id);
+
+    const resp = await blingRequest("https://www.bling.com.br/Api/v3/estoques/saldos", token, params);
+    const saldos = resp.data?.data || [];
+
+    for (const s of saldos) {
+      const idProd = s.produto?.id;
+      if (!idProd) continue;
+      let saldo = 0;
+      if (s.depositos && Array.isArray(s.depositos)) {
+        const dep = s.depositos.find(d => d.id === DEPOSITO_SEDE_ID);
+        if (dep) saldo = dep.saldoFisico ?? dep.saldoVirtual ?? 0;
+      }
+      saldoMap.set(idProd, saldo);
+    }
+    if (i + 50 < variacoes.length) await delay(500);
+  }
+
+  // 4) Agrupa por tamanho → cor
+  const nomeProduto = extrairNomeLimpo(variacoes[0].nome || variacoes[0].descricao || '')
+    .replace(/^\d+[-\s]*/, '').trim();
+
+  const porTamanho = new Map();
+  for (const p of variacoes) {
+    const desc = p.nome || p.descricao || '';
+    const { cor, tam } = extrairCorTam(desc);
+    const saldo = saldoMap.get(p.id) || 0;
+    if (!porTamanho.has(tam)) porTamanho.set(tam, []);
+    porTamanho.get(tam).push({ cor, saldo });
+  }
+
+  return { nomeProduto, referencia, porTamanho, totalVariacoes: variacoes.length };
+}
+
+// Formata a resposta de estoque para o grupo Sede Giovana (formato limpo, sem emoji)
+function formatarEstoqueSede(nomeProduto, ref, porTamanho) {
+  let msg = `${nomeProduto}\n\nREF: -${ref}\n`;
+
+  const ordemTamanhos = ['PP', 'P', 'M', 'G', 'GG', 'XG', 'XXG', 'EG', 'EGG'];
+  const tamanhos = [...porTamanho.keys()].sort((a, b) => {
+    const ia = ordemTamanhos.indexOf(a.toUpperCase());
+    const ib = ordemTamanhos.indexOf(b.toUpperCase());
+    if (ia === -1 && ib === -1) return a.localeCompare(b);
+    if (ia === -1) return 1;
+    if (ib === -1) return -1;
+    return ia - ib;
+  });
+
+  for (const tam of tamanhos) {
+    msg += `\n${tam}\n`;
+    const cores = porTamanho.get(tam).sort((a, b) => a.cor.localeCompare(b.cor));
+    for (const { cor, saldo } of cores) {
+      msg += `${cor} ${saldo}\n`;
+    }
+  }
+
+  return msg.trim();
+}
 
 // Extrai referência numérica do início da descrição (ex: "31- CONJUNTO SUÍÇA" → "31")
 function extrairRef(descricao) {
