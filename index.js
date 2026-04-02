@@ -2110,7 +2110,25 @@ wppClient.on('message_create', async (msg) => {
   }
 });
 
-wppClient.initialize();
+// Inicializa WhatsApp com retry (Puppeteer pode perder o contexto na primeira conexão)
+(async () => {
+  const MAX_TENTATIVAS = 3;
+  for (let tentativa = 1; tentativa <= MAX_TENTATIVAS; tentativa++) {
+    try {
+      await wppClient.initialize();
+      break;
+    } catch (err) {
+      console.error(`   [WhatsApp] Falha ao inicializar (tentativa ${tentativa}/${MAX_TENTATIVAS}):`, err.message);
+      if (tentativa < MAX_TENTATIVAS) {
+        const espera = tentativa * 5000;
+        console.log(`   [WhatsApp] Tentando novamente em ${espera / 1000}s...`);
+        await delay(espera);
+      } else {
+        console.error('   [WhatsApp] ⚠️ Não foi possível inicializar após 3 tentativas. O restante do sistema continua funcionando.');
+      }
+    }
+  }
+})();
 
 // ══════════════════════════════════════════════════
 // 🏪 SEDE GIOVANA — BUSCA DE ESTOQUE EM TEMPO REAL
