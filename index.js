@@ -268,6 +268,9 @@ async function sincronizarCatalogoEmSegundoPlano() {
     syncState.ultimaSyncOk = Date.now();
     salvarCatalogoNoDisco(produtos);
     console.log(`   [Sync] Sincronização concluída! ${produtos.length} produtos atualizados.`);
+
+    // 🚨 Dispara motor de alertas proativos após sync bem-sucedido
+    avaliarEDispararAlertas().catch(e => console.error('   [AlertaManager] Erro:', e.message));
   } catch (e) {
     console.error("   [Sync] Falha na sincronização:", e.message);
   } finally {
@@ -2061,8 +2064,13 @@ const REFS_MONITORADAS = [
 const MINIMO_SEDE = 30;
 const MINIMO_BASE = 60;
 
-// Último snapshot de alertas enviados (para detectar mudanças)
-let ultimoAlertaHash = '';
+// Thresholds de alerta por depósito (do mais crítico ao menos crítico)
+const THRESHOLDS_SEDE = [0, 15, 30];
+const THRESHOLDS_BASE = [0, 30, 60];
+
+// Grupos WhatsApp para alertas automáticos
+const GRUPO_ALERTA_SEDE = 'Estoque Marketplace';
+const GRUPO_ALERTA_BASE = 'Estoque Base de Reposição';
 
 const wppClient = new Client({
   authStrategy: new LocalAuth(),
@@ -2447,5 +2455,284 @@ async function enviarPorLotes(chat, cabecalho, conjuntos) {
     const totalPaginas = Math.ceil(conjuntos.length / LOTE);
     await chat.sendMessage(`📄 *${pagina}/${totalPaginas}*\n\n${msg}`);
     await delay(2000); // 2 segundos entre lotes
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+// 🚨 ALERTA MANAGER — Motor de alertas proativos pós-sync
+// ══════════════════════════════════════════════════════════════
+
+// Estado anti-spam: Map<"produtoId_deposito", nivelAlertado>
+// Exemplo: "12345_sede" → 15 (já alertou quando caiu para <=15)
+// Reseta quando estoque sobe acima do maior threshold (reposição)
+const alertaEstado = new Map();
+
+/**
+ * Determina o nível de alerta para um saldo dado os thresholds.
+ * Thresholds devem estar ordenados do mais crítico ao menos: [0, 15, 30]
+ * Retorna o threshold atingido ou null se estoque está saudável.
+ */
+function determinarNivel(saldo, thresholds) {
+  // Percorre do menos crítico ao mais crítico para achar o threshold mais alto atingido
+  // depois refina para o mais crítico
+  for (const t of thresholds) {
+    if (saldo === 0 && t === 0) return 0;
+    if (t > 0 && saldo > 0 && saldo <= t) return t;
+  }
+  if (saldo === 0) return 0;
+  return null; // saudável
+}
+
+/**
+ * Verifica se deve alertar para esta variação (anti-spam).
+ * Retorna { deveAlertar: boolean, nivel: number|null }
+ */
+function verificarEstadoAlerta(produtoId, deposito, saldo, thresholds) {
+  const chave = `${produtoId}_${deposito}`;
+  const nivelAtual = determinarNivel(saldo, thresholds);
+  const maiorThreshold = Math.max(...thresholds);
+
+  // Estoque saudável → limpa estado (reposição detectada)
+  if (nivelAtual === null) {
+    if (alertaEstado.has(chave)) {
+      alertaEstado.delete(chave);
+      console.log(`   [Alerta] ✅ Reposição detectada: ${chave} (saldo: ${saldo})`);
+    }
+    return { deveAlertar: false, nivel: null };
+  }
+
+  // Estoque subiu mas ainda dentro de threshold → verifica se subiu de nível
+  const nivelAnterior = alertaEstado.get(chave);
+
+  if (nivelAnterior === undefined) {
+    // Nunca alertou → alerta agora
+    alertaEstado.set(chave, nivelAtual);
+    return { deveAlertar: true, nivel: nivelAtual };
+  }
+
+  if (nivelAtual < nivelAnterior) {
+    // Caiu para nível mais crítico (ex: de 30 → 15, ou de 15 → 0)
+    alertaEstado.set(chave, nivelAtual);
+    return { deveAlertar: true, nivel: nivelAtual };
+  }
+
+  // Estoque subiu mas voltou a cair para o mesmo nível → reposição parcial
+  // Se subiu acima do nível anterior e voltou a cair, reseta e alerta
+  // Se continua no mesmo nível → anti-spam, não alerta
+  return { deveAlertar: false, nivel: nivelAtual };
+}
+
+/**
+ * Monta a grade completa de um produto-pai (referência) a partir do cache.
+ * Usado quando uma variação atinge estoque 0 (ruptura).
+ * @param {string} ref - Referência do produto (ex: "108")
+ * @param {string} deposito - 'sede' ou 'base'
+ * @param {Map} saldosBase - Mapa de saldos do depósito BASE (se deposito === 'base')
+ * @returns {string} Grade formatada
+ */
+function montarGradeRuptura(ref, deposito, saldosBase) {
+  const variacoes = cacheProdutos.filter(p => {
+    const r = extrairRef(p.descricao);
+    return r === ref && /COR:/i.test(p.descricao || '');
+  });
+
+  if (variacoes.length === 0) return '';
+
+  const nomeLimpo = extrairNomeLimpo(variacoes[0].descricao)
+    .replace(/^\d+[-\s]*/, '').trim();
+
+  // Agrupa por tamanho → cores
+  const ordemTam = ['PP', 'P', 'M', 'G', 'GG', 'XG', 'XXG', 'EG', 'EGG'];
+  const porTam = new Map();
+
+  for (const p of variacoes) {
+    const { cor, tam } = extrairCorTam(p.descricao);
+    const saldo = deposito === 'base'
+      ? (saldosBase.get(p.id) || 0)
+      : (p.saldoFisicoTotal || 0);
+    if (!porTam.has(tam)) porTam.set(tam, []);
+    porTam.get(tam).push({ cor, saldo });
+  }
+
+  const tamanhos = [...porTam.keys()].sort((a, b) => {
+    const ia = ordemTam.indexOf(a.toUpperCase());
+    const ib = ordemTam.indexOf(b.toUpperCase());
+    if (ia === -1 && ib === -1) return a.localeCompare(b);
+    if (ia === -1) return 1;
+    if (ib === -1) return -1;
+    return ia - ib;
+  });
+
+  let grade = `📋 *Grade completa ${ref} – ${nomeLimpo}:*\n`;
+  for (const tam of tamanhos) {
+    const cores = porTam.get(tam).sort((a, b) => a.cor.localeCompare(b.cor));
+    grade += `\n*${tam}*\n`;
+    for (const { cor, saldo } of cores) {
+      const icone = saldo === 0 ? '🚨' : saldo <= 5 ? '⚠️' : '✅';
+      grade += `${icone} ${cor}: ${saldo}\n`;
+    }
+  }
+  return grade.trim();
+}
+
+/**
+ * Formata um alerta individual para uma variação.
+ */
+function formatarAlertaVariacao(p, saldo, nivel, deposito, saldosBase) {
+  const { cor, tam } = extrairCorTam(p.descricao);
+  const ref = extrairRef(p.descricao);
+  const nomeLimpo = extrairNomeLimpo(p.descricao).replace(/^\d+[-\s]*/, '').trim();
+
+  let icone, label;
+  if (nivel === 0) { icone = '🚨'; label = 'RUPTURA'; }
+  else if (nivel <= 15) { icone = '🔴'; label = 'CRÍTICO'; }
+  else { icone = '⚠️'; label = 'BAIXO'; }
+
+  let msg = `${icone} *[${label}]* ${ref} – ${nomeLimpo}\n`;
+  msg += `🎨 ${cor} | 👗 ${tam} → *${saldo} pçs*\n`;
+
+  // Se ruptura (==0), anexa grade completa do produto-pai
+  if (nivel === 0) {
+    msg += `\n${montarGradeRuptura(ref, deposito, saldosBase)}`;
+  }
+
+  return msg;
+}
+
+/**
+ * Motor principal: varre o cache aplicando thresholds e dispara alertas.
+ * Chamado automaticamente após cada sincronização bem-sucedida.
+ */
+async function avaliarEDispararAlertas() {
+  if (!cacheProdutos || cacheProdutos.length === 0) {
+    console.log('   [AlertaManager] Cache vazio, pulando.');
+    return;
+  }
+
+  // Filtra variações monitoradas (Lista VIP + tem COR: na descrição)
+  const monitorados = cacheProdutos.filter(p => {
+    const ref = extrairRef(p.descricao);
+    return ref && /COR:/i.test(p.descricao || '') && REFS_MONITORADAS.includes(ref);
+  });
+
+  if (monitorados.length === 0) {
+    console.log('   [AlertaManager] Nenhum produto monitorado no cache.');
+    return;
+  }
+
+  console.log(`   [AlertaManager] Analisando ${monitorados.length} variações da Lista VIP...`);
+
+  // Busca saldos BASE (SEDE já está no cache via saldoFisicoTotal)
+  let saldosBase = new Map();
+  try {
+    const token = await obterAccessToken();
+    saldosBase = await buscarSaldosPorDeposito(token, monitorados.map(p => p.id), DEPOSITO_BASE_ID);
+  } catch (e) {
+    console.error('   [AlertaManager] Erro ao buscar saldos BASE:', e.message);
+  }
+
+  // Classifica alertas por depósito e prioridade
+  const alertasSede = { rupturas: [], criticos: [], baixos: [] };
+  const alertasBase = { rupturas: [], criticos: [], baixos: [] };
+
+  for (const p of monitorados) {
+    const saldoSede = p.saldoFisicoTotal || 0;
+    const saldoBase = saldosBase.get(p.id) || 0;
+
+    // --- SEDE ---
+    const checkSede = verificarEstadoAlerta(p.id, 'sede', saldoSede, THRESHOLDS_SEDE);
+    if (checkSede.deveAlertar) {
+      const msg = formatarAlertaVariacao(p, saldoSede, checkSede.nivel, 'sede', null);
+      if (checkSede.nivel === 0) alertasSede.rupturas.push(msg);
+      else if (checkSede.nivel <= 15) alertasSede.criticos.push(msg);
+      else alertasSede.baixos.push(msg);
+    }
+
+    // --- BASE ---
+    const checkBase = verificarEstadoAlerta(p.id, 'base', saldoBase, THRESHOLDS_BASE);
+    if (checkBase.deveAlertar) {
+      const msg = formatarAlertaVariacao(p, saldoBase, checkBase.nivel, 'base', saldosBase);
+      if (checkBase.nivel === 0) alertasBase.rupturas.push(msg);
+      else if (checkBase.nivel <= 30) alertasBase.criticos.push(msg);
+      else alertasBase.baixos.push(msg);
+    }
+  }
+
+  const totalSede = alertasSede.rupturas.length + alertasSede.criticos.length + alertasSede.baixos.length;
+  const totalBase = alertasBase.rupturas.length + alertasBase.criticos.length + alertasBase.baixos.length;
+
+  console.log(`   [AlertaManager] Resultado → SEDE: ${totalSede} alertas | BASE: ${totalBase} alertas | Estado: ${alertaEstado.size} variações rastreadas`);
+
+  if (totalSede === 0 && totalBase === 0) {
+    console.log('   [AlertaManager] ✅ Sem novos alertas (anti-spam ativo).');
+    return;
+  }
+
+  // Busca os grupos de WhatsApp
+  let chats;
+  try {
+    chats = await wppClient.getChats();
+  } catch (e) {
+    console.error('   [AlertaManager] WhatsApp não conectado:', e.message);
+    return;
+  }
+
+  const dataHora = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+
+  // --- Envia para SEDE (Estoque Marketplace) ---
+  if (totalSede > 0) {
+    const grupoSede = chats.find(c => c.isGroup && c.name === GRUPO_ALERTA_SEDE);
+    if (grupoSede) {
+      await enviarAlertasPorPrioridade(grupoSede, 'SEDE', dataHora, alertasSede);
+      console.log(`   [AlertaManager] 📤 SEDE: ${totalSede} alerta(s) enviado(s).`);
+    } else {
+      console.error(`   [AlertaManager] ⚠️ Grupo "${GRUPO_ALERTA_SEDE}" não encontrado!`);
+    }
+    await delay(3000);
+  }
+
+  // --- Envia para BASE (Estoque Base de Reposição) ---
+  if (totalBase > 0) {
+    const grupoBase = chats.find(c => c.isGroup && c.name === GRUPO_ALERTA_BASE);
+    if (grupoBase) {
+      await enviarAlertasPorPrioridade(grupoBase, 'BASE', dataHora, alertasBase);
+      console.log(`   [AlertaManager] 📤 BASE: ${totalBase} alerta(s) enviado(s).`);
+    } else {
+      console.error(`   [AlertaManager] ⚠️ Grupo "${GRUPO_ALERTA_BASE}" não encontrado!`);
+    }
+  }
+}
+
+/**
+ * Envia alertas organizados por prioridade: rupturas primeiro, depois críticos, depois baixos.
+ * Cada bloco vai em mensagem separada com cabeçalho descritivo.
+ */
+async function enviarAlertasPorPrioridade(chat, nomeDeposito, dataHora, alertas) {
+  const { rupturas, criticos, baixos } = alertas;
+  const total = rupturas.length + criticos.length + baixos.length;
+
+  await chat.sendMessage(
+    `📊 *ALERTA DE ESTOQUE ${nomeDeposito} — ${dataHora}*\n` +
+    `🚨 ${rupturas.length} ruptura(s) | 🔴 ${criticos.length} crítico(s) | ⚠️ ${baixos.length} baixo(s)\n` +
+    `━━━━━━━━━━━━━━━━━━`
+  );
+  await delay(1000);
+
+  // Rupturas primeiro (mais urgentes, contêm grade completa)
+  if (rupturas.length > 0) {
+    for (const msg of rupturas) {
+      await chat.sendMessage(msg);
+      await delay(1500); // Mais lento pois rupturas têm grade completa
+    }
+  }
+
+  // Críticos e baixos agrupados em blocos de 5
+  const outros = [...criticos, ...baixos];
+  if (outros.length > 0) {
+    for (let i = 0; i < outros.length; i += 5) {
+      const lote = outros.slice(i, i + 5);
+      await chat.sendMessage(lote.join('\n━━━━━━━━━━━━━━━━━━\n'));
+      await delay(2000);
+    }
   }
 }
