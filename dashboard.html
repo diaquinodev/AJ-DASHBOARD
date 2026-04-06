@@ -24,9 +24,7 @@
 </head>
 <body class="text-slate-800 flex flex-col h-screen overflow-hidden">
 
-    <!-- HEADER -->
     <header class="bg-white border-b border-slate-200 shrink-0 z-20 shadow-sm">
-        <!-- Top bar -->
         <div class="px-4 lg:px-6 py-3 flex flex-wrap items-center justify-between gap-3">
             <div class="flex items-center gap-2.5 min-w-0">
                 <div class="bg-indigo-600 p-2 rounded-lg shadow-sm shrink-0"><i data-lucide="store" class="text-white w-5 h-5"></i></div>
@@ -49,7 +47,6 @@
             </div>
         </div>
 
-        <!-- Filters bar -->
         <div class="px-4 lg:px-6 pb-3 flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
             <div class="flex bg-slate-100 p-1 rounded-lg overflow-x-auto shrink-0">
                 <button onclick="mudarFiltro('todos', this)" class="filtro-btn px-3 py-1.5 text-xs font-semibold rounded-md bg-white shadow-sm text-indigo-700 transition whitespace-nowrap">
@@ -69,9 +66,19 @@
         </div>
     </header>
 
-    <!-- MAIN CONTENT -->
     <main class="flex-1 overflow-y-auto custom-scroll">
         <div class="p-4 lg:p-6">
+            
+            <div id="sync-panel" class="bg-white border border-slate-200 rounded-xl p-4 mb-6 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 shadow-sm shrink-0">
+                <div>
+                    <h4 class="text-sm font-bold text-slate-800 flex items-center gap-1.5 mb-1"><i data-lucide="refresh-cw" class="w-4 h-4 text-indigo-500"></i> Status do Estoque (Bling)</h4>
+                    <p class="text-xs text-slate-500">Última atualização: <strong id="lbl-ultima-sync" class="text-slate-700">Carregando...</strong></p>
+                    <p class="text-xs text-slate-500 mt-0.5">Próxima atualização em: <strong id="lbl-proxima-sync" class="text-indigo-600 font-bold">--:--</strong></p>
+                </div>
+                <button id="btn-forcar-sync" onclick="forcarAtualizacao()" class="flex items-center gap-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 px-4 py-2 rounded-lg font-bold text-xs transition shadow-sm whitespace-nowrap w-full sm:w-auto justify-center">
+                    <i data-lucide="rotate-cw" id="btn-sync-icon" class="w-3.5 h-3.5"></i> <span>Forçar Atualização</span>
+                </button>
+            </div>
             <div id="loader" class="flex flex-col items-center justify-center py-20">
                 <i data-lucide="loader-2" class="w-8 h-8 text-indigo-500 animate-spin mb-3"></i>
                 <p class="text-slate-400 font-medium text-sm">Sincronizando com o Bling...</p>
@@ -80,7 +87,6 @@
         </div>
     </main>
 
-    <!-- MODAL PRODUTO -->
     <div id="modalProduto" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm hidden z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">
         <div class="bg-white rounded-t-2xl sm:rounded-2xl shadow-xl w-full sm:max-w-4xl max-h-[90vh] flex flex-col overflow-hidden">
             <div class="p-4 lg:p-5 border-b border-slate-200 flex justify-between items-center bg-slate-50 shrink-0">
@@ -374,6 +380,79 @@
                 alert("Erro ao conectar. O servidor esta rodando?");
             }
         }
+
+        // --- LÓGICA DO PAINEL DE SYNC ---
+        let contagemInterval;
+
+        async function carregarStatusSync() {
+            try {
+                const res = await fetch('/api/sync-status');
+                const data = await res.json();
+
+                document.getElementById('lbl-ultima-sync').innerText = data.ultimaSyncFormatada || 'Ainda não sincronizado';
+
+                if (data.sincronizando) {
+                    document.getElementById('lbl-proxima-sync').innerText = 'Sincronizando agora...';
+                } else {
+                    iniciarCronometro(data.proximaSyncMs);
+                }
+            } catch (erro) {
+                console.error('Erro ao carregar status do sync:', erro);
+                document.getElementById('lbl-proxima-sync').innerText = 'Erro de conexão';
+            }
+        }
+
+        function iniciarCronometro(tempoRestanteMs) {
+            clearInterval(contagemInterval);
+            let tempoEmSegundos = Math.floor(tempoRestanteMs / 1000);
+
+            contagemInterval = setInterval(() => {
+                if (tempoEmSegundos <= 0) {
+                    clearInterval(contagemInterval);
+                    document.getElementById('lbl-proxima-sync').innerText = 'Iniciando...';
+                    setTimeout(carregarStatusSync, 3000);
+                    return;
+                }
+                tempoEmSegundos--;
+                const minutos = Math.floor(tempoEmSegundos / 60).toString().padStart(2, '0');
+                const segundos = (tempoEmSegundos % 60).toString().padStart(2, '0');
+                document.getElementById('lbl-proxima-sync').innerText = `${minutos}:${segundos}`;
+            }, 1000);
+        }
+
+        window.forcarAtualizacao = async function() {
+            const btn = document.getElementById('btn-forcar-sync');
+            const icon = document.getElementById('btn-sync-icon');
+            btn.disabled = true;
+            btn.classList.add('opacity-70', 'cursor-not-allowed');
+            icon.classList.add('animate-spin');
+            
+            try {
+                const res = await fetch('/api/forcar-sync', { method: 'POST' });
+
+                if (res.status === 409) {
+                    alert('Aguarde, já existe uma sincronização rodando no servidor.');
+                } else if (res.status === 429) {
+                    alert('Aguarde o tempo de resfriamento (2 minutos) para forçar uma nova busca.');
+                } else if (res.status === 200) {
+                    const data = await res.json();
+                    alert(`Estoque atualizado: ${data.totalProdutos || 0} produtos sincronizados com sucesso!`);
+                    carregarStatusSync();
+                    carregarDados(); // Recarrega a grade de produtos na tela
+                } else {
+                    alert('Erro ao sincronizar com o Bling.');
+                }
+            } catch (erro) {
+                alert('Erro de conexão com o servidor local.');
+            } finally {
+                btn.disabled = false;
+                btn.classList.remove('opacity-70', 'cursor-not-allowed');
+                icon.classList.remove('animate-spin');
+            }
+        }
+
+        carregarStatusSync();
+        // --- FIM DA LÓGICA DO PAINEL ---
 
         carregarDados();
     </script>
