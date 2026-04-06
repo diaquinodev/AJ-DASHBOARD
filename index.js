@@ -50,6 +50,26 @@ let cacheProdutos = null;
 let ultimoCacheHora = 0;
 let cachePedidosRecentes = [];
 
+// 🔄 CONTROLE DE SINCRONIZAÇÃO — Timer gerenciável com estado exposto
+const SYNC_INTERVALO_MS = 30 * 60 * 1000; // 30 minutos
+const SYNC_COOLDOWN_MS = 2 * 60 * 1000;   // 2 min entre syncs manuais
+const syncState = {
+  timerRef: null,            // referência do setInterval atual
+  ultimaSyncOk: 0,           // timestamp da última sync bem-sucedida
+  ultimaSyncForçada: 0,      // timestamp da última sync manual (cooldown)
+  proximaSync: 0,            // timestamp estimado da próxima sync automática
+};
+
+function iniciarTimerSync() {
+  if (syncState.timerRef) clearInterval(syncState.timerRef);
+  syncState.proximaSync = Date.now() + SYNC_INTERVALO_MS;
+  syncState.timerRef = setInterval(() => {
+    console.log("\n   [Auto-Sync] Sincronização periódica (30 min)...");
+    syncState.proximaSync = Date.now() + SYNC_INTERVALO_MS;
+    sincronizarCatalogoEmSegundoPlano();
+  }, SYNC_INTERVALO_MS);
+}
+
 // 🔒 PROTEÇÃO CONTRA DUPLICIDADE — Registra operações já processadas
 const operacoesFinalizadas = new Map(); // chave: idempotencyKey → { timestamp, resultado }
 const EXPIRACAO_OPERACAO_MS = 30 * 60 * 1000; // 30 minutos
@@ -245,6 +265,7 @@ async function sincronizarCatalogoEmSegundoPlano() {
     const produtos = await buscarEstoque(token);
     cacheProdutos = produtos;
     ultimoCacheHora = Date.now();
+    syncState.ultimaSyncOk = Date.now();
     salvarCatalogoNoDisco(produtos);
     console.log(`   [Sync] Sincronização concluída! ${produtos.length} produtos atualizados.`);
   } catch (e) {
@@ -424,6 +445,63 @@ app.get('/api/health', (req, res) => {
         memoria: Math.round(process.memoryUsage().heapUsed / 1024 / 1024) + 'MB',
         operacoesPendentes: operacoesFinalizadas.size
     });
+});
+
+// 📊 Status da sincronização — alimenta cronômetro no front-end
+app.get('/api/sync-status', (req, res) => {
+    const agora = Date.now();
+    const faltaMs = Math.max(0, syncState.proximaSync - agora);
+    const minutos = Math.floor(faltaMs / 60000);
+    const segundos = Math.floor((faltaMs % 60000) / 1000);
+
+    res.json({
+        ultimaSyncOk: syncState.ultimaSyncOk || null,
+        ultimaSyncFormatada: syncState.ultimaSyncOk
+            ? new Date(syncState.ultimaSyncOk).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })
+            : 'nunca',
+        proximaSyncMs: faltaMs,
+        proximaSyncFormatada: `${minutos}m ${segundos}s`,
+        sincronizando: sincronizandoCatalogo,
+        totalProdutos: cacheProdutos ? cacheProdutos.length : 0
+    });
+});
+
+// 🔴 Forçar sincronização manual (botão de pânico)
+app.post('/api/forcar-sync', async (req, res) => {
+    // Cooldown de 2 minutos entre syncs manuais
+    const agora = Date.now();
+    const tempoDesdeUltima = agora - syncState.ultimaSyncForçada;
+    if (tempoDesdeUltima < SYNC_COOLDOWN_MS) {
+        const restante = Math.ceil((SYNC_COOLDOWN_MS - tempoDesdeUltima) / 1000);
+        return res.status(429).json({
+            erro: `Aguarde ${restante}s antes de forçar nova sincronização.`,
+            cooldownRestante: restante
+        });
+    }
+
+    if (sincronizandoCatalogo) {
+        return res.status(409).json({ erro: 'Sincronização já em andamento. Aguarde.' });
+    }
+
+    console.log('\n   [Sync] 🔴 Sincronização FORÇADA pela equipe!');
+    syncState.ultimaSyncForçada = agora;
+
+    // Reseta o timer para evitar sync duplo
+    iniciarTimerSync();
+
+    try {
+        await sincronizarCatalogoEmSegundoPlano();
+        res.json({
+            ok: true,
+            mensagem: 'Sincronização concluída!',
+            totalProdutos: cacheProdutos ? cacheProdutos.length : 0,
+            atualizadoEm: new Date(syncState.ultimaSyncOk).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }),
+            proximaSyncMs: syncState.proximaSync - Date.now()
+        });
+    } catch (e) {
+        console.error('   [Sync] Falha na sync forçada:', e.message);
+        res.status(500).json({ erro: 'Falha na sincronização: ' + e.message });
+    }
 });
 
 // ──────────────────────────────────────────────
@@ -1947,11 +2025,8 @@ app.listen(3000, "0.0.0.0", () => {
     sincronizarCatalogoEmSegundoPlano();
   }, 5000);
 
-  // 🔄 Re-sincroniza a cada 30 minutos automaticamente
-  setInterval(() => {
-    console.log("\n   [Auto-Sync] Sincronização periódica (30 min)...");
-    sincronizarCatalogoEmSegundoPlano();
-  }, 30 * 60 * 1000);
+  // 🔄 Re-sincroniza a cada 30 minutos automaticamente (com timer gerenciável)
+  iniciarTimerSync();
 
   // 🧹 Limpa operações expiradas a cada 10 minutos (evita memory leak)
   setInterval(() => {
