@@ -2155,13 +2155,16 @@ wppClient.on('message_create', async (msg) => {
       return;
     }
 
-    // Determina filtro
+    // Determina filtro: !estoque [sede|base] [<ref>]
     let filtroDeposito = null;
     let filtroRef = null;
 
-    if (arg === 'sede') filtroDeposito = 'sede';
-    else if (arg === 'base') filtroDeposito = 'base';
-    else if (arg) filtroRef = arg;
+    if (arg === 'sede' || arg === 'base') {
+      filtroDeposito = arg;
+      if (partes[2]) filtroRef = partes[2]; // !estoque sede 104 / !estoque base 104
+    } else if (arg) {
+      filtroRef = arg; // !estoque 104
+    }
 
     // Valida referência
     if (filtroRef && !REFS_MONITORADAS.includes(filtroRef)) {
@@ -2169,11 +2172,46 @@ wppClient.on('message_create', async (msg) => {
       return;
     }
 
+    const dataHora = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+
+    // ─── NOVO: Comando específico !estoque sede <ref> ou !estoque base <ref>
+    // Resposta = bloco isolado do modelo solicitado, sem misturar outras refs
+    if (filtroDeposito && filtroRef) {
+      await chat.sendMessage(`⏳ Consultando ${filtroDeposito.toUpperCase()} ref ${filtroRef}...`);
+
+      let saldosBaseConsulta = null;
+      if (filtroDeposito === 'base') {
+        try {
+          const token = await obterAccessToken();
+          const variacoesRef = cacheProdutos.filter(p => {
+            const r = extrairRef(p.descricao);
+            return r === filtroRef && /COR:/i.test(p.descricao || '');
+          });
+          if (variacoesRef.length === 0) {
+            await chat.sendMessage(`⚠️ Nenhuma variação encontrada para ref ${filtroRef}.`);
+            return;
+          }
+          saldosBaseConsulta = await buscarSaldosPorDeposito(token, variacoesRef.map(p => p.id), DEPOSITO_BASE_ID);
+        } catch (e) {
+          await chat.sendMessage('⚠️ Erro ao buscar saldos BASE.');
+          return;
+        }
+      }
+
+      const bloco = montarBlocoModelo(filtroRef, filtroDeposito, saldosBaseConsulta, `📋 *CONSULTA ${dataHora}*`);
+      if (bloco) {
+        await chat.sendMessage(bloco);
+        console.log(`   [WhatsApp] ✅ Bloco enviado: ${filtroDeposito.toUpperCase()} ref ${filtroRef}`);
+      } else {
+        await chat.sendMessage(`⚠️ Nenhuma variação encontrada para ref ${filtroRef}.`);
+      }
+      return;
+    }
+
     await chat.sendMessage(`⏳ Consultando estoque...`);
 
-    // Gera alertas agrupados por conjunto
+    // Gera alertas agrupados por conjunto (visão geral, sem ref específica)
     const { conjuntosSede, conjuntosBase } = await gerarAlertasPorConjunto(filtroRef, filtroDeposito);
-    const dataHora = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
 
     if (!filtroDeposito || filtroDeposito === 'sede') {
       if (conjuntosSede.length > 0) {
@@ -2530,32 +2568,33 @@ function verificarEstadoAlerta(produtoId, deposito, saldo, thresholds) {
 }
 
 /**
- * Monta a grade completa de um produto-pai (referência) a partir do cache.
- * Usado quando uma variação atinge estoque 0 (ruptura).
- * @param {string} ref - Referência do produto (ex: "108")
+ * Monta um bloco completo (header + grade) de UMA referência em UM depósito.
+ * Reutilizado tanto pelos alertas automáticos quanto pelos comandos manuais
+ * !estoque sede <ref> e !estoque base <ref>.
+ * @param {string} ref - Referência (ex: "108")
  * @param {string} deposito - 'sede' ou 'base'
- * @param {Map} saldosBase - Mapa de saldos do depósito BASE (se deposito === 'base')
- * @returns {string} Grade formatada
+ * @param {Map|null} saldosBase - Mapa de saldos BASE (somente se deposito === 'base')
+ * @param {string} headerLabel - Texto do cabeçalho (ex: "🚨 ALERTA — 06/04 15:30")
+ * @returns {string|null} Bloco formatado pronto para sendMessage, ou null se ref não existir
  */
-function montarGradeRuptura(ref, deposito, saldosBase) {
+function montarBlocoModelo(ref, deposito, saldosBase, headerLabel) {
   const variacoes = cacheProdutos.filter(p => {
     const r = extrairRef(p.descricao);
     return r === ref && /COR:/i.test(p.descricao || '');
   });
 
-  if (variacoes.length === 0) return '';
+  if (variacoes.length === 0) return null;
 
   const nomeLimpo = extrairNomeLimpo(variacoes[0].descricao)
     .replace(/^\d+[-\s]*/, '').trim();
 
-  // Agrupa por tamanho → cores
   const ordemTam = ['PP', 'P', 'M', 'G', 'GG', 'XG', 'XXG', 'EG', 'EGG'];
   const porTam = new Map();
 
   for (const p of variacoes) {
     const { cor, tam } = extrairCorTam(p.descricao);
     const saldo = deposito === 'base'
-      ? (saldosBase.get(p.id) || 0)
+      ? (saldosBase ? (saldosBase.get(p.id) || 0) : 0)
       : (p.saldoFisicoTotal || 0);
     if (!porTam.has(tam)) porTam.set(tam, []);
     porTam.get(tam).push({ cor, saldo });
@@ -2570,44 +2609,26 @@ function montarGradeRuptura(ref, deposito, saldosBase) {
     return ia - ib;
   });
 
-  let grade = `📋 *Grade completa ${ref} – ${nomeLimpo}:*\n`;
+  const labelDep = deposito === 'base' ? 'BASE' : 'SEDE';
+  let bloco = `${headerLabel} — *${labelDep}*\n`;
+  bloco += `📦 *${ref} – ${nomeLimpo}*\n`;
+  bloco += `━━━━━━━━━━━━━━━━━━`;
+
   for (const tam of tamanhos) {
     const cores = porTam.get(tam).sort((a, b) => a.cor.localeCompare(b.cor));
-    grade += `\n*${tam}*\n`;
+    bloco += `\n\n*${tam}*`;
     for (const { cor, saldo } of cores) {
       const icone = saldo === 0 ? '🚨' : saldo <= 5 ? '⚠️' : '✅';
-      grade += `${icone} ${cor}: ${saldo}\n`;
+      bloco += `\n${icone} ${cor}: ${saldo}`;
     }
   }
-  return grade.trim();
-}
-
-/**
- * Formata um alerta individual para uma variação.
- */
-function formatarAlertaVariacao(p, saldo, nivel, deposito, saldosBase) {
-  const { cor, tam } = extrairCorTam(p.descricao);
-  const ref = extrairRef(p.descricao);
-  const nomeLimpo = extrairNomeLimpo(p.descricao).replace(/^\d+[-\s]*/, '').trim();
-
-  let icone, label;
-  if (nivel === 0) { icone = '🚨'; label = 'RUPTURA'; }
-  else { icone = '🔴'; label = 'CRÍTICO'; }
-
-  let msg = `${icone} *[${label}]* ${ref} – ${nomeLimpo}\n`;
-  msg += `🎨 ${cor} | 👗 ${tam} → *${saldo} pçs*\n`;
-
-  // Se ruptura (==0), anexa grade completa do produto-pai
-  if (nivel === 0) {
-    msg += `\n${montarGradeRuptura(ref, deposito, saldosBase)}`;
-  }
-
-  return msg;
+  return bloco;
 }
 
 /**
  * Motor principal: varre o cache aplicando thresholds e dispara alertas.
  * Chamado automaticamente após cada sincronização bem-sucedida.
+ * NOVA REGRA: envia 1 mensagem por modelo (referência), não consolida modelos diferentes.
  */
 async function avaliarEDispararAlertas() {
   if (!cacheProdutos || cacheProdutos.length === 0) {
@@ -2637,37 +2658,32 @@ async function avaliarEDispararAlertas() {
     console.error('   [AlertaManager] Erro ao buscar saldos BASE:', e.message);
   }
 
-  // Classifica alertas por depósito e prioridade (rupturas primeiro, depois críticos)
-  const alertasSede = { rupturas: [], criticos: [] };
-  const alertasBase = { rupturas: [], criticos: [] };
+  // Coleta refs em alerta por depósito (Map<ref, 'ruptura'|'critico'>)
+  // Anti-spam continua per-variação, mas o agrupamento de envio é por ref.
+  const refsAlertaSede = new Map();
+  const refsAlertaBase = new Map();
+
+  function classificarRef(mapa, ref, nivel) {
+    const tipoAtual = mapa.get(ref);
+    if (nivel === 0 || tipoAtual === 'ruptura') mapa.set(ref, 'ruptura');
+    else mapa.set(ref, 'critico');
+  }
 
   for (const p of monitorados) {
+    const ref = extrairRef(p.descricao);
     const saldoSede = p.saldoFisicoTotal || 0;
     const saldoBase = saldosBase.get(p.id) || 0;
 
-    // --- SEDE ---
     const checkSede = verificarEstadoAlerta(p.id, 'sede', saldoSede, THRESHOLDS_SEDE);
-    if (checkSede.deveAlertar) {
-      const msg = formatarAlertaVariacao(p, saldoSede, checkSede.nivel, 'sede', null);
-      if (checkSede.nivel === 0) alertasSede.rupturas.push(msg);
-      else alertasSede.criticos.push(msg);
-    }
+    if (checkSede.deveAlertar) classificarRef(refsAlertaSede, ref, checkSede.nivel);
 
-    // --- BASE ---
     const checkBase = verificarEstadoAlerta(p.id, 'base', saldoBase, THRESHOLDS_BASE);
-    if (checkBase.deveAlertar) {
-      const msg = formatarAlertaVariacao(p, saldoBase, checkBase.nivel, 'base', saldosBase);
-      if (checkBase.nivel === 0) alertasBase.rupturas.push(msg);
-      else alertasBase.criticos.push(msg);
-    }
+    if (checkBase.deveAlertar) classificarRef(refsAlertaBase, ref, checkBase.nivel);
   }
 
-  const totalSede = alertasSede.rupturas.length + alertasSede.criticos.length;
-  const totalBase = alertasBase.rupturas.length + alertasBase.criticos.length;
+  console.log(`   [AlertaManager] Resultado → SEDE: ${refsAlertaSede.size} modelo(s) | BASE: ${refsAlertaBase.size} modelo(s) | Estado: ${alertaEstado.size} variações rastreadas`);
 
-  console.log(`   [AlertaManager] Resultado → SEDE: ${totalSede} alertas | BASE: ${totalBase} alertas | Estado: ${alertaEstado.size} variações rastreadas`);
-
-  if (totalSede === 0 && totalBase === 0) {
+  if (refsAlertaSede.size === 0 && refsAlertaBase.size === 0) {
     console.log('   [AlertaManager] ✅ Sem novos alertas (anti-spam ativo).');
     return;
   }
@@ -2683,54 +2699,44 @@ async function avaliarEDispararAlertas() {
 
   const dataHora = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
 
-  // --- Envia para SEDE (Estoque Marketplace) ---
-  if (totalSede > 0) {
+  // --- SEDE: 1 mensagem por modelo ---
+  if (refsAlertaSede.size > 0) {
     const grupoSede = chats.find(c => c.isGroup && c.name === GRUPO_ALERTA_SEDE);
     if (grupoSede) {
-      await enviarBlocoUnico(grupoSede, 'SEDE', dataHora, alertasSede);
-      console.log(`   [AlertaManager] 📤 SEDE: ${totalSede} alerta(s) enviado(s) em bloco único.`);
+      for (const [ref, tipo] of refsAlertaSede) {
+        const icone = tipo === 'ruptura' ? '🚨' : '🔴';
+        const label = tipo === 'ruptura' ? 'RUPTURA' : 'CRÍTICO';
+        const header = `${icone} *${label} ${dataHora}*`;
+        const bloco = montarBlocoModelo(ref, 'sede', null, header);
+        if (bloco) {
+          await grupoSede.sendMessage(bloco);
+          await delay(1500);
+        }
+      }
+      console.log(`   [AlertaManager] 📤 SEDE: ${refsAlertaSede.size} modelo(s) enviado(s).`);
     } else {
       console.error(`   [AlertaManager] ⚠️ Grupo "${GRUPO_ALERTA_SEDE}" não encontrado!`);
     }
     await delay(2000);
   }
 
-  // --- Envia para BASE (Estoque Base de Reposição) ---
-  if (totalBase > 0) {
+  // --- BASE: 1 mensagem por modelo ---
+  if (refsAlertaBase.size > 0) {
     const grupoBase = chats.find(c => c.isGroup && c.name === GRUPO_ALERTA_BASE);
     if (grupoBase) {
-      await enviarBlocoUnico(grupoBase, 'BASE', dataHora, alertasBase);
-      console.log(`   [AlertaManager] 📤 BASE: ${totalBase} alerta(s) enviado(s) em bloco único.`);
+      for (const [ref, tipo] of refsAlertaBase) {
+        const icone = tipo === 'ruptura' ? '🚨' : '🔴';
+        const label = tipo === 'ruptura' ? 'RUPTURA' : 'CRÍTICO';
+        const header = `${icone} *${label} ${dataHora}*`;
+        const bloco = montarBlocoModelo(ref, 'base', saldosBase, header);
+        if (bloco) {
+          await grupoBase.sendMessage(bloco);
+          await delay(1500);
+        }
+      }
+      console.log(`   [AlertaManager] 📤 BASE: ${refsAlertaBase.size} modelo(s) enviado(s).`);
     } else {
       console.error(`   [AlertaManager] ⚠️ Grupo "${GRUPO_ALERTA_BASE}" não encontrado!`);
     }
   }
-}
-
-/**
- * Consolida todos os alertas (rupturas com grade + críticos) em UMA única mensagem
- * e envia com um só sendMessage por grupo, conforme solicitação da diretoria.
- */
-async function enviarBlocoUnico(chat, nomeDeposito, dataHora, alertas) {
-  const { rupturas, criticos } = alertas;
-
-  const partes = [];
-  partes.push(
-    `📊 *ALERTA DE ESTOQUE ${nomeDeposito} — ${dataHora}*\n` +
-    `🚨 ${rupturas.length} ruptura(s) | 🔴 ${criticos.length} crítico(s)\n` +
-    `━━━━━━━━━━━━━━━━━━`
-  );
-
-  // Rupturas primeiro (mais urgentes, incluem grade completa do pai)
-  if (rupturas.length > 0) {
-    partes.push(...rupturas);
-  }
-
-  // Depois os críticos
-  if (criticos.length > 0) {
-    partes.push(...criticos);
-  }
-
-  const mensagemUnica = partes.join('\n\n');
-  await chat.sendMessage(mensagemUnica);
 }
