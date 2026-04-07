@@ -2065,8 +2065,8 @@ const MINIMO_SEDE = 30;
 const MINIMO_BASE = 60;
 
 // Thresholds de alerta por depósito (do mais crítico ao menos crítico)
-const THRESHOLDS_SEDE = [0, 15, 30];
-const THRESHOLDS_BASE = [0, 30, 60];
+const THRESHOLDS_SEDE = [0, 15];
+const THRESHOLDS_BASE = [0, 30];
 
 // Grupos WhatsApp para alertas automáticos
 const GRUPO_ALERTA_SEDE = 'Estoque Marketplace';
@@ -2592,8 +2592,7 @@ function formatarAlertaVariacao(p, saldo, nivel, deposito, saldosBase) {
 
   let icone, label;
   if (nivel === 0) { icone = '🚨'; label = 'RUPTURA'; }
-  else if (nivel <= 15) { icone = '🔴'; label = 'CRÍTICO'; }
-  else { icone = '⚠️'; label = 'BAIXO'; }
+  else { icone = '🔴'; label = 'CRÍTICO'; }
 
   let msg = `${icone} *[${label}]* ${ref} – ${nomeLimpo}\n`;
   msg += `🎨 ${cor} | 👗 ${tam} → *${saldo} pçs*\n`;
@@ -2638,9 +2637,9 @@ async function avaliarEDispararAlertas() {
     console.error('   [AlertaManager] Erro ao buscar saldos BASE:', e.message);
   }
 
-  // Classifica alertas por depósito e prioridade
-  const alertasSede = { rupturas: [], criticos: [], baixos: [] };
-  const alertasBase = { rupturas: [], criticos: [], baixos: [] };
+  // Classifica alertas por depósito e prioridade (rupturas primeiro, depois críticos)
+  const alertasSede = { rupturas: [], criticos: [] };
+  const alertasBase = { rupturas: [], criticos: [] };
 
   for (const p of monitorados) {
     const saldoSede = p.saldoFisicoTotal || 0;
@@ -2651,8 +2650,7 @@ async function avaliarEDispararAlertas() {
     if (checkSede.deveAlertar) {
       const msg = formatarAlertaVariacao(p, saldoSede, checkSede.nivel, 'sede', null);
       if (checkSede.nivel === 0) alertasSede.rupturas.push(msg);
-      else if (checkSede.nivel <= 15) alertasSede.criticos.push(msg);
-      else alertasSede.baixos.push(msg);
+      else alertasSede.criticos.push(msg);
     }
 
     // --- BASE ---
@@ -2660,13 +2658,12 @@ async function avaliarEDispararAlertas() {
     if (checkBase.deveAlertar) {
       const msg = formatarAlertaVariacao(p, saldoBase, checkBase.nivel, 'base', saldosBase);
       if (checkBase.nivel === 0) alertasBase.rupturas.push(msg);
-      else if (checkBase.nivel <= 30) alertasBase.criticos.push(msg);
-      else alertasBase.baixos.push(msg);
+      else alertasBase.criticos.push(msg);
     }
   }
 
-  const totalSede = alertasSede.rupturas.length + alertasSede.criticos.length + alertasSede.baixos.length;
-  const totalBase = alertasBase.rupturas.length + alertasBase.criticos.length + alertasBase.baixos.length;
+  const totalSede = alertasSede.rupturas.length + alertasSede.criticos.length;
+  const totalBase = alertasBase.rupturas.length + alertasBase.criticos.length;
 
   console.log(`   [AlertaManager] Resultado → SEDE: ${totalSede} alertas | BASE: ${totalBase} alertas | Estado: ${alertaEstado.size} variações rastreadas`);
 
@@ -2690,20 +2687,20 @@ async function avaliarEDispararAlertas() {
   if (totalSede > 0) {
     const grupoSede = chats.find(c => c.isGroup && c.name === GRUPO_ALERTA_SEDE);
     if (grupoSede) {
-      await enviarAlertasPorPrioridade(grupoSede, 'SEDE', dataHora, alertasSede);
-      console.log(`   [AlertaManager] 📤 SEDE: ${totalSede} alerta(s) enviado(s).`);
+      await enviarBlocoUnico(grupoSede, 'SEDE', dataHora, alertasSede);
+      console.log(`   [AlertaManager] 📤 SEDE: ${totalSede} alerta(s) enviado(s) em bloco único.`);
     } else {
       console.error(`   [AlertaManager] ⚠️ Grupo "${GRUPO_ALERTA_SEDE}" não encontrado!`);
     }
-    await delay(3000);
+    await delay(2000);
   }
 
   // --- Envia para BASE (Estoque Base de Reposição) ---
   if (totalBase > 0) {
     const grupoBase = chats.find(c => c.isGroup && c.name === GRUPO_ALERTA_BASE);
     if (grupoBase) {
-      await enviarAlertasPorPrioridade(grupoBase, 'BASE', dataHora, alertasBase);
-      console.log(`   [AlertaManager] 📤 BASE: ${totalBase} alerta(s) enviado(s).`);
+      await enviarBlocoUnico(grupoBase, 'BASE', dataHora, alertasBase);
+      console.log(`   [AlertaManager] 📤 BASE: ${totalBase} alerta(s) enviado(s) em bloco único.`);
     } else {
       console.error(`   [AlertaManager] ⚠️ Grupo "${GRUPO_ALERTA_BASE}" não encontrado!`);
     }
@@ -2711,35 +2708,29 @@ async function avaliarEDispararAlertas() {
 }
 
 /**
- * Envia alertas organizados por prioridade: rupturas primeiro, depois críticos, depois baixos.
- * Cada bloco vai em mensagem separada com cabeçalho descritivo.
+ * Consolida todos os alertas (rupturas com grade + críticos) em UMA única mensagem
+ * e envia com um só sendMessage por grupo, conforme solicitação da diretoria.
  */
-async function enviarAlertasPorPrioridade(chat, nomeDeposito, dataHora, alertas) {
-  const { rupturas, criticos, baixos } = alertas;
-  const total = rupturas.length + criticos.length + baixos.length;
+async function enviarBlocoUnico(chat, nomeDeposito, dataHora, alertas) {
+  const { rupturas, criticos } = alertas;
 
-  await chat.sendMessage(
+  const partes = [];
+  partes.push(
     `📊 *ALERTA DE ESTOQUE ${nomeDeposito} — ${dataHora}*\n` +
-    `🚨 ${rupturas.length} ruptura(s) | 🔴 ${criticos.length} crítico(s) | ⚠️ ${baixos.length} baixo(s)\n` +
+    `🚨 ${rupturas.length} ruptura(s) | 🔴 ${criticos.length} crítico(s)\n` +
     `━━━━━━━━━━━━━━━━━━`
   );
-  await delay(1000);
 
-  // Rupturas primeiro (mais urgentes, contêm grade completa)
+  // Rupturas primeiro (mais urgentes, incluem grade completa do pai)
   if (rupturas.length > 0) {
-    for (const msg of rupturas) {
-      await chat.sendMessage(msg);
-      await delay(1500); // Mais lento pois rupturas têm grade completa
-    }
+    partes.push(...rupturas);
   }
 
-  // Críticos e baixos agrupados em blocos de 5
-  const outros = [...criticos, ...baixos];
-  if (outros.length > 0) {
-    for (let i = 0; i < outros.length; i += 5) {
-      const lote = outros.slice(i, i + 5);
-      await chat.sendMessage(lote.join('\n━━━━━━━━━━━━━━━━━━\n'));
-      await delay(2000);
-    }
+  // Depois os críticos
+  if (criticos.length > 0) {
+    partes.push(...criticos);
   }
+
+  const mensagemUnica = partes.join('\n\n');
+  await chat.sendMessage(mensagemUnica);
 }
