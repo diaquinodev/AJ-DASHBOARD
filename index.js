@@ -2092,6 +2092,13 @@ wppClient.on("disconnected", (reason) => {
 
 // 📩 Listener de comandos no grupo WhatsApp (registrado ANTES do initialize)
 let _processandoComando = false;
+
+// Grupos autorizados a usar o comando !estoque baseado em cache
+const GRUPOS_COMANDO_CACHE = [
+  'Estoque Marketplace',
+  'Estoque Base de Reposição'
+];
+
 wppClient.on('message_create', async (msg) => {
   try {
     if (!msg.body || msg.body.trim() === '') return;
@@ -2136,9 +2143,9 @@ wppClient.on('message_create', async (msg) => {
     }
 
     // ─────────────────────────────────────────────────────────
-    // 📦 GRUPO "Estoque Marketplace" — consulta via cache
+    // 📦 GRUPOS COM CACHE — Marketplace + Base de Reposição
     // ─────────────────────────────────────────────────────────
-    if (chat.name !== CONFIG.whatsapp.nomeDoGrupo) return;
+    if (!GRUPOS_COMANDO_CACHE.includes(chat.name)) return;
 
     console.log(`\n📩 [WhatsApp] Comando recebido: "${msg.body}"`);
     _processandoComando = true;
