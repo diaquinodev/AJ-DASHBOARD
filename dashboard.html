@@ -192,83 +192,68 @@
     </div>
 
     <script>
-        window.abrirModal = function (index) {
+        window.abrirModal = function(index) {
             const grupo = window.gruposExibidos[index];
-            if (!grupo) return;
-
+            if(!grupo) return;
+            
             document.getElementById('modalTitle').innerText = grupo.nome;
+            
             const badgeRef = document.getElementById('modalRef');
-            const btnExportar = document.getElementById('btnExportarModal');
-
-            // Armazena a referência para o botão de exportar via dataset (eliminando escopo global)
-            if (grupo.ref) {
-                btnExportar.setAttribute('data-ref', grupo.ref);
-                badgeRef.innerText = `REF: ${grupo.ref}`;
-                badgeRef.classList.remove('hidden');
-                badgeRef.classList.add('inline-flex');
-                btnExportar.classList.remove('hidden');
+            const btnEx = document.getElementById('btnExportarModal');
+            
+            if (grupo.ref && grupo.ref !== "undefined") {
+                badgeRef.innerText = `REF: ${grupo.ref}`; 
+                badgeRef.classList.replace('hidden', 'inline-flex');
+                btnEx.classList.remove('hidden');
+                
+                // INJEÇÃO DIRETA: Sobrescreve a ação do botão com a ref cravada
+                btnEx.onclick = function() {
+                    const iconOriginal = btnEx.innerHTML;
+                    btnEx.innerHTML = `<i data-lucide="loader-2" class="w-4 h-4 animate-spin"></i> Zip...`;
+                    btnEx.disabled = true;
+                    
+                    window.location.href = `/api/exportar-upseller?refs=${grupo.ref}`;
+                    
+                    setTimeout(() => { 
+                        btnEx.innerHTML = iconOriginal; 
+                        btnEx.disabled = false; 
+                        if(window.lucide) lucide.createIcons(); 
+                    }, 3000);
+                };
             } else {
-                btnExportar.setAttribute('data-ref', '');
-                badgeRef.classList.add('hidden');
-                badgeRef.classList.remove('inline-flex');
-                btnExportar.classList.add('hidden'); // Esconde se não tiver ref
+                badgeRef.classList.replace('inline-flex', 'hidden'); 
+                btnEx.classList.add('hidden');
+                btnEx.onclick = null;
             }
 
             grupo.variacoes.sort((a, b) => b.saldoFisicoTotal - a.saldoFisicoTotal);
             const labels = grupo.variacoes.map(v => `${v.cor} (${v.tam})`);
             const data = grupo.variacoes.map(v => v.saldoFisicoTotal);
-            const bgColors = data.map(val => val <= 10 ? '#F43F5E' : '#4F46E5');
-            const ctx = document.getElementById('variacoesChart').getContext('2d');
-
-            if (chartInstance) chartInstance.destroy();
-            chartInstance = new Chart(ctx, {
-                type: 'bar',
-                data: { labels: labels, datasets: [{ label: 'Qtd', data: data, backgroundColor: bgColors, borderRadius: 6 }] },
-                options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true } } }
+            
+            if (typeof chartInstance !== 'undefined' && chartInstance) chartInstance.destroy();
+            chartInstance = new Chart(document.getElementById('variacoesChart').getContext('2d'), { 
+                type: 'bar', 
+                data: { labels, datasets: [{ data, backgroundColor: data.map(v => v<=10?'#F43F5E':'#4F46E5'), borderRadius: 6 }] }, 
+                options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } } } 
             });
 
-            const listHtml = grupo.variacoes.map(v => {
-                const isAlerta = v.saldoFisicoTotal <= 10;
-                return `
-        <div class="p-3 bg-white border border-slate-200 rounded-lg shadow-sm flex justify-between items-center hover:border-indigo-200 transition">
-            <div class="min-w-0 flex-1 pr-3">
-                <p class="text-[10px] text-slate-400 font-bold mb-0.5">SKU: ${v.codigo || 'S/COD'}</p>
-                <p class="text-sm font-bold text-slate-800 break-words">${v.cor} <span class="text-slate-300">|</span> Tam: ${v.tam}</p>
-            </div>
-            <div class="flex items-center gap-2 shrink-0">
-                <span class="px-2 py-1 text-xs font-bold rounded ${isAlerta ? 'bg-rose-100 text-rose-700 border border-rose-200' : 'bg-emerald-100 text-emerald-700 border border-emerald-200'}">${v.saldoFisicoTotal} un.</span>
-                <button onclick="event.stopPropagation(); copiarDados('${v.codigo}', '${grupo.nome.replace(/'/g, "\\'")}', '${grupo.ref || ''}', '${v.cor}', '${v.tam}', '${v.saldoFisicoTotal}')" class="text-indigo-500 hover:text-indigo-700 p-1 transition" title="Copiar dados"><i data-lucide="copy" class="w-3.5 h-3.5"></i></button>
-            </div>
-        </div>`;
-            }).join('');
-
-            document.getElementById('modalVariacoesList').innerHTML = listHtml;
+            document.getElementById('modalVariacoesList').innerHTML = grupo.variacoes.map(v => `
+            <div class="p-3 bg-white border border-slate-200 rounded-lg shadow-sm mb-2 hover:border-indigo-200 transition">
+                <p class="text-[10px] text-slate-400 font-bold">SKU: ${v.codigo || 'S/COD'}</p>
+                <div class="flex justify-between items-center mt-0.5">
+                    <p class="text-sm font-bold text-slate-800">${v.cor} | Tam: ${v.tam}</p>
+                    <div class="flex items-center gap-2">
+                        <span class="px-2 py-0.5 rounded text-xs font-bold ${v.saldoFisicoTotal <= 10 ? 'bg-rose-100 text-rose-700' : 'bg-emerald-100 text-emerald-700'}">${v.saldoFisicoTotal} un.</span>
+                    </div>
+                </div>
+            </div>`).join('');
+            
             document.getElementById('modalProduto').classList.remove('hidden');
-            lucide.createIcons();
+            if(window.lucide) lucide.createIcons();
         }
 
-        // Ação do Botão Exportar do Modal
-        window.exportarRefDoModal = function () {
-            const btn = document.getElementById('btnExportarModal');
-            const refProduto = btn.getAttribute('data-ref');
-
-            if (!refProduto || refProduto === 'undefined') {
-                alert("Este produto não possui uma Referência numérica cadastrada.");
-                return;
-            }
-
-            const iconOriginal = btn.innerHTML;
-            btn.innerHTML = `<i data-lucide="loader-2" class="w-4 h-4 animate-spin"></i> Zip...`;
-            btn.disabled = true;
-
-            // Dispara a requisição para o backend passando o parâmetro blindado
-            window.location.href = `/api/exportar-upseller?refs=${refProduto}`;
-
-            setTimeout(() => {
-                btn.innerHTML = iconOriginal;
-                btn.disabled = false;
-                lucide.createIcons();
-            }, 3000);
+        window.exportarRefDoModal = function() {
+            console.log("Exportação injetada via onclick. Esta função atua apenas como fallback.");
         }
     </script>
     <script>
