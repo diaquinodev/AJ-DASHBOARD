@@ -5,18 +5,18 @@
  * ============================================================
  */
 
-const archiver              = require('archiver');
+const archiver       = require('archiver');
 const { Client, LocalAuth } = require("whatsapp-web.js");
-const qrcode                = require("qrcode-terminal");
-const cron                  = require("node-cron");
-const axios                 = require("axios");
-const fs                    = require("fs");
-const path                  = require("path");
-const express               = require("express");
-const cors                  = require("cors");
-const xlsx                  = require("xlsx"); 
-const multer                = require("multer"); 
-const pdfParse              = require("pdf-parse"); // Adicionado suporte a PDF
+const qrcode         = require("qrcode-terminal");
+const cron           = require("node-cron");
+const axios          = require("axios");
+const fs             = require("fs");
+const path           = require("path");
+const express        = require("express");
+const cors           = require("cors");
+const xlsx           = require("xlsx"); 
+const multer         = require("multer"); 
+const pdfParse       = require("pdf-parse"); // Adicionado suporte a PDF
 
 const delay = (ms) => new Promise(res => setTimeout(res, ms));
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } }); // max 10MB 
@@ -297,7 +297,7 @@ function salvarTokens(dados) {
 async function renovarToken(refreshToken) {
   const credenciais = Buffer.from(`${CONFIG.bling.clientId}:${CONFIG.bling.clientSecret}`).toString("base64");
   const resp = await axios.post(
-    "https://www.bling.com.br/Api/v3/oauth/token",
+    "https://api.bling.com.br/Api/v3/oauth/token",
     new URLSearchParams({ grant_type: "refresh_token", refresh_token: refreshToken }),
     { headers: { Authorization: `Basic ${credenciais}`, "Content-Type": "application/x-www-form-urlencoded" } }
   );
@@ -349,7 +349,7 @@ async function buscarEstoque(accessToken) {
   console.log("   [Bling] Iniciando busca de produtos...");
   do {
     try {
-      const resp = await blingRequest("https://www.bling.com.br/Api/v3/produtos", accessToken, { pagina, limite: 100, tipo: 'T' });
+      const resp = await blingRequest("https://api.bling.com.br/Api/v3/produtos", accessToken, { pagina, limite: 100, tipo: 'T' });
 
       const data = resp.data?.data ?? [];
       todosProdutos.push(...data);
@@ -382,7 +382,7 @@ async function buscarEstoque(accessToken) {
     try {
       const params = new URLSearchParams();
       for (const id of lote) params.append("idsProdutos[]", id);
-      const resp = await blingRequest("https://www.bling.com.br/Api/v3/estoques/saldos", accessToken, params);
+      const resp = await blingRequest("https://api.bling.com.br/Api/v3/estoques/saldos", accessToken, params);
       saldos.push(...(resp.data?.data ?? []));
       console.log(`   [Bling] Saldos: lote ${li+1}/${lotes.length} OK`);
     } catch (err) {
@@ -662,7 +662,7 @@ app.get('/api/checkout/sincronizar', async (req, res) => {
         
         for (let pagina = 1; pagina <= 10; pagina++) {
             try {
-                const url = `https://www.bling.com.br/Api/v3/pedidos/vendas?dataInicial=${dataInicial}&pagina=${pagina}&limite=100`;
+                const url = `https://api.bling.com.br/Api/v3/pedidos/vendas?dataInicial=${dataInicial}&pagina=${pagina}&limite=100`;
                 const resp = await axios.get(url, { headers: { Authorization: `Bearer ${token}` } });
                 
                 if (resp.data && resp.data.data && resp.data.data.length > 0) {
@@ -774,7 +774,7 @@ app.get('/api/checkout/pedido/:numero', async (req, res) => {
         } else {
             console.log(`📡 [Checkout] Não estava na memória. Tentativa de emergência na API...`);
             try {
-                const resp = await axios.get(`https://www.bling.com.br/Api/v3/pedidos/vendas?numeroLoja=${numero}`, { headers: { Authorization: `Bearer ${token}` } });
+                const resp = await axios.get(`https://api.bling.com.br/Api/v3/pedidos/vendas?numeroLoja=${numero}`, { headers: { Authorization: `Bearer ${token}` } });
                 if(resp.data && resp.data.data && resp.data.data.length > 0) {
                     const found = resp.data.data.find(p => String(p.numeroLoja) === numero);
                     if (found) {
@@ -792,7 +792,7 @@ app.get('/api/checkout/pedido/:numero', async (req, res) => {
         }
 
         console.log(`📦 Baixando peças do pedido...`);
-        const respDetalhes = await axios.get(`https://www.bling.com.br/Api/v3/pedidos/vendas/${pedidoId}`, { headers: { Authorization: `Bearer ${token}` } });
+        const respDetalhes = await axios.get(`https://api.bling.com.br/Api/v3/pedidos/vendas/${pedidoId}`, { headers: { Authorization: `Bearer ${token}` } });
         
         const itensBling = respDetalhes.data.data.itens.map(i => {
             const sku = i.codigo || i.produto?.codigo || "S/COD";
@@ -862,7 +862,7 @@ app.post('/api/checkout/finalizar', async (req, res) => {
                 // Resolver ID do produto original se não veio do frontend (PLANILHA)
                 if (!troca.originalProdutoId && troca.originalSku) {
                     try {
-                        const respBusca = await axios.get(`https://www.bling.com.br/Api/v3/produtos?codigo=${encodeURIComponent(troca.originalSku)}`, { headers: { Authorization: `Bearer ${token}` }});
+                        const respBusca = await axios.get(`https://api.bling.com.br/Api/v3/produtos?codigo=${encodeURIComponent(troca.originalSku)}`, { headers: { Authorization: `Bearer ${token}` }});
                         if (respBusca.data?.data?.length > 0) {
                             troca.originalProdutoId = respBusca.data.data[0].id;
                             console.log(`   🔍 Resolvido ID do item original "${troca.originalSku}" → ${troca.originalProdutoId}`);
@@ -872,7 +872,7 @@ app.post('/api/checkout/finalizar', async (req, res) => {
                 // ENTRADA do item removido (devolver ao estoque)
                 if (troca.originalProdutoId) {
                     try {
-                        await axios.post("https://www.bling.com.br/Api/v3/estoques", {
+                        await axios.post("https://api.bling.com.br/Api/v3/estoques", {
                             produto: { id: troca.originalProdutoId },
                             deposito: { id: depositoId },
                             operacao: "E",
@@ -888,7 +888,7 @@ app.post('/api/checkout/finalizar', async (req, res) => {
                 // SAÍDA do novo item (retirar do estoque)
                 if (troca.novoProdutoId) {
                     try {
-                        await axios.post("https://www.bling.com.br/Api/v3/estoques", {
+                        await axios.post("https://api.bling.com.br/Api/v3/estoques", {
                             produto: { id: troca.novoProdutoId },
                             deposito: { id: depositoId },
                             operacao: "S",
@@ -911,13 +911,13 @@ app.post('/api/checkout/finalizar', async (req, res) => {
                 let prodId = item.produtoId;
                 if (!prodId && item.sku) {
                     try {
-                        const resp = await axios.get(`https://www.bling.com.br/Api/v3/produtos?codigo=${encodeURIComponent(item.sku)}`, { headers: { Authorization: `Bearer ${token}` }});
+                        const resp = await axios.get(`https://api.bling.com.br/Api/v3/produtos?codigo=${encodeURIComponent(item.sku)}`, { headers: { Authorization: `Bearer ${token}` }});
                         if (resp.data?.data?.length > 0) prodId = resp.data.data[0].id;
                     } catch (e) {}
                 }
                 if (prodId) {
                     try {
-                        await axios.post("https://www.bling.com.br/Api/v3/estoques", {
+                        await axios.post("https://api.bling.com.br/Api/v3/estoques", {
                             produto: { id: prodId },
                             deposito: { id: depositoId },
                             operacao: "E",
@@ -941,7 +941,7 @@ app.post('/api/checkout/finalizar', async (req, res) => {
             for (const item of adicionados) {
                 if (item.produtoId) {
                     try {
-                        await axios.post("https://www.bling.com.br/Api/v3/estoques", {
+                        await axios.post("https://api.bling.com.br/Api/v3/estoques", {
                             produto: { id: item.produtoId },
                             deposito: { id: depositoId },
                             operacao: "S",
@@ -960,7 +960,7 @@ app.post('/api/checkout/finalizar', async (req, res) => {
         if (origem === 'BLING') {
             console.log(`\n⏳ Injetando Vendedor (SITE) e Loja (SEDE) no pedido ${numero}...`);
 
-            const respPedido = await axios.get(`https://www.bling.com.br/Api/v3/pedidos/vendas/${id}`, {
+            const respPedido = await axios.get(`https://api.bling.com.br/Api/v3/pedidos/vendas/${id}`, {
                 headers: { Authorization: `Bearer ${token}` }
             });
 
@@ -970,7 +970,7 @@ app.post('/api/checkout/finalizar', async (req, res) => {
             dadosPedido.vendedor = { id: 15596386514 }; // ID do Vendedor SITE
 
             try {
-                await axios.put(`https://www.bling.com.br/Api/v3/pedidos/vendas/${id}`, dadosPedido, {
+                await axios.put(`https://api.bling.com.br/Api/v3/pedidos/vendas/${id}`, dadosPedido, {
                     headers: { Authorization: `Bearer ${token}` }
                 });
                 console.log(`✅ Loja e Vendedor atualizados com sucesso no Bling!`);
@@ -979,7 +979,7 @@ app.post('/api/checkout/finalizar', async (req, res) => {
             }
 
             try {
-                await axios.patch(`https://www.bling.com.br/Api/v3/pedidos/vendas/${id}/situacoes/9`, {}, {
+                await axios.patch(`https://api.bling.com.br/Api/v3/pedidos/vendas/${id}/situacoes/9`, {}, {
                     headers: { Authorization: `Bearer ${token}` }
                 });
                 console.log(`✅ [Checkout] Pedido Bling ${numero} marcado como Atendido!`);
@@ -1005,7 +1005,7 @@ app.post('/api/checkout/finalizar', async (req, res) => {
 
                     // 1️⃣ Tenta buscar direto pelo código na API do Bling
                     try {
-                        const respProd = await axios.get(`https://www.bling.com.br/Api/v3/produtos?codigo=${encodeURIComponent(item.sku)}`, { headers: { Authorization: `Bearer ${token}` }});
+                        const respProd = await axios.get(`https://api.bling.com.br/Api/v3/produtos?codigo=${encodeURIComponent(item.sku)}`, { headers: { Authorization: `Bearer ${token}` }});
                         if (respProd.data?.data?.length > 0) {
                             prodId = respProd.data.data[0].id;
                             console.log(`   ✅ SKU "${item.sku}" encontrado direto na API Bling (ID: ${prodId})`);
@@ -1033,7 +1033,7 @@ app.post('/api/checkout/finalizar', async (req, res) => {
                         const parsed = parseUpSellerSku(item.sku);
                         if (parsed && parsed.ref) {
                             try {
-                                const respRef = await axios.get(`https://www.bling.com.br/Api/v3/produtos?codigo=${encodeURIComponent(parsed.ref)}`, { headers: { Authorization: `Bearer ${token}` }});
+                                const respRef = await axios.get(`https://api.bling.com.br/Api/v3/produtos?codigo=${encodeURIComponent(parsed.ref)}`, { headers: { Authorization: `Bearer ${token}` }});
                                 const produtos = respRef.data?.data || [];
                                 for (const p of produtos) {
                                     // Extrai cor e tamanho do nome Bling e compara com normalização
@@ -1056,7 +1056,7 @@ app.post('/api/checkout/finalizar', async (req, res) => {
                     }
 
                     if (prodId) {
-                        await axios.post("https://www.bling.com.br/Api/v3/estoques", {
+                        await axios.post("https://api.bling.com.br/Api/v3/estoques", {
                             produto: { id: prodId },
                             deposito: { id: depositoId },
                             operacao: "S",
@@ -1257,84 +1257,87 @@ app.get('/api/debug-skus', async (req, res) => {
     }
 });
 
-
 // ──────────────────────────────────────────────
-// 🟢 EXPORTAÇÃO UPSELLER (ESTOQUE ESPELHO)
-// Parseia nome do Bling → SKU UpSeller (REF-Cor-Tamanho)
+// 🟢 EXPORTAÇÃO UPSELLER (LOTE MULTI-REF + AUDITORIA) - BLINDADO
 // ──────────────────────────────────────────────
 app.get('/api/exportar-upseller', async (req, res) => {
     req.setTimeout(120000);
     res.setTimeout(120000);
     try {
-        console.log(`\n📦 [UpSeller] Gerando ZIP (regra: >10un = 2000+real, ≤10un = estoque real)...`);
+        const LIMIAR_SEGURANCA = 30;
+        
+        // Extrai o array de referências (ex: ?refs=33,108,45) - LIMPO (sem zeros a esquerda)
+        const refsQuery = req.query.refs 
+            ? req.query.refs.split(',').map(r => r.trim().replace(/^0+/, '')).filter(r => r) 
+            : null;
+        
+        console.log(`\n📦 [UpSeller] Iniciando Exportação... Limiar: ${LIMIAR_SEGURANCA}un`);
+        if (refsQuery) console.log(`   [UpSeller] 🎯 LOTE ATIVADO (Barreira de Ferro): [${refsQuery.join(', ')}]`);
 
-        // Sempre busca dados frescos do Bling para garantir estoque atualizado
-        console.log(`   [UpSeller] Buscando estoque atualizado do Bling...`);
         const token = await obterAccessToken();
         const produtos = await buscarEstoque(token);
         cacheProdutos = produtos;
         ultimoCacheHora = Date.now();
-        console.log(`   [UpSeller] ${produtos.length} produtos do Bling (dados frescos).`);
 
         if (!produtos || produtos.length === 0) {
             return res.status(404).json({ erro: "Nenhum produto encontrado no Bling." });
         }
 
-        let logConteudo = `====================================================\n`;
-        logConteudo += `📊 RELATÓRIO DE EXPORTAÇÃO UPSELLER (ESTOQUE ESPELHO)\n`;
-        logConteudo += `Data: ${new Date().toLocaleString('pt-BR')}\n`;
-        logConteudo += `Regra: Estoque real > 10 → envia 2000 + real | Estoque ≤ 10 → envia estoque real\n`;
-        logConteudo += `====================================================\n\n`;
+        // Estruturas de Log de Auditoria
+        let logRepostos = `🟢 PEÇAS REPOSTAS (MÁSCARA ATIVADA | ESTOQUE >= ${LIMIAR_SEGURANCA})\n----------------------------------------------------\n`;
+        let logBaixos = `\n🔴 PEÇAS BAIXAS/ZERADAS (SALDO REAL | ESTOQUE < ${LIMIAR_SEGURANCA})\n----------------------------------------------------\n`;
+        let logKits = `\n⚠️ KITS (ENVIADO PADRÃO 100)\n----------------------------------------------------\n`;
+        let logSemMatch = `\n❌ SEM MATCH (ZERADOS POR SEGURANÇA)\n----------------------------------------------------\n`;
 
-        let qtdAtivo = 0;
-        let qtdZerado = 0;
-        let qtdIgnorados = 0;
-        let qtdSemMatch = 0;
-        let qtdKit = 0;
+        let qtdAtivo = 0, qtdZerado = 0, qtdIgnorados = 0, qtdSemMatch = 0, qtdKit = 0;
 
-        // Cabeçalho exato da UpSeller (AOA = matriz)
-        const dadosPlanilha = [
-            [
-                "SKU*",
-                "Estoque Baixo\n(Não será atualizado se não for preenchido)",
-                "Qtd. Total Atualizado\n(Não será atualizado se não for preenchido)",
-                "Custo Médio Atualizado\n(Não será atualizado se não for preenchido)"
-            ]
-        ];
+        const dadosPlanilha = [[
+            "SKU*",
+            "Estoque Baixo\n(Não será atualizado se não for preenchido)",
+            "Qtd. Total Atualizado\n(Não será atualizado se não for preenchido)",
+            "Custo Médio Atualizado\n(Não será atualizado se não for preenchido)"
+        ]];
 
-        // Verifica se existe catálogo UpSeller salvo
         const catalogoUpSeller = lerCatalogoUpSeller();
         const usarCatalogoReal = catalogoUpSeller && catalogoUpSeller.skus && catalogoUpSeller.skus.length > 0;
 
-        if (usarCatalogoReal) {
-            // ====== MODO CATÁLOGO REAL ======
-            console.log(`   [UpSeller] Modo CATÁLOGO REAL: ${catalogoUpSeller.skus.length} SKUs do armazém`);
-            logConteudo += `MODO: Catálogo Real UpSeller (${catalogoUpSeller.skus.length} SKUs)\n\n`;
+        // Função utilitária para extrair a REF principal do SKU e tirar os zeros da frente
+        const extrairRefEstrita = (sku) => {
+            if (!sku) return null;
+            const partes = sku.split('-');
+            if (partes.length === 0) return null;
+            return partes[0].trim().replace(/^0+/, ''); // "0031" -> "31"
+        };
 
+        if (usarCatalogoReal) {
             const mapaBling = construirMapaBling(produtos);
-            console.log(`   [UpSeller] Mapa Bling construído: ${mapaBling.size} variações mapeadas`);
 
             for (const skuReal of catalogoUpSeller.skus) {
+                // BARREIRA DE FERRO: Se tiver filtro ativo, a REF do SKU tem que ser exatamente igual
+                if (refsQuery && refsQuery.length > 0) {
+                    const refDoSku = extrairRefEstrita(skuReal);
+                    if (!refDoSku || !refsQuery.includes(refDoSku)) {
+                        continue; // Pula silenciosamente, não é o produto que queremos
+                    }
+                }
+
                 const parsed = parseUpSellerSku(skuReal);
                 if (!parsed) {
                     qtdIgnorados++;
-                    logConteudo += `[IGNORADO] SKU não parseável: ${skuReal}\n`;
                     continue;
                 }
 
                 const produtoBling = buscarNoMapaBling(mapaBling, parsed.ref, parsed.cor, parsed.tam);
 
                 if (!produtoBling) {
-                    // Verifica se é um Kit — envia 100 ao invés de 0
                     if (/kit/i.test(skuReal)) {
                         qtdKit++;
-                        logConteudo += `[KIT] ${skuReal} — sem match no Bling, enviando 100 (kit)\n`;
                         dadosPlanilha.push([skuReal, "", 100, ""]);
+                        logKits += `- ${skuReal} -> Enviado: 100\n`;
                     } else {
                         qtdSemMatch++;
-                        const chaveDebug = normalizarChaveMatch(parsed.ref, parsed.cor, parsed.tam);
-                        logConteudo += `[SEM MATCH] ${skuReal} → chave: ${chaveDebug} (enviando 0 para zerar na UpSeller)\n`;
                         dadosPlanilha.push([skuReal, "", 0, ""]);
+                        logSemMatch += `- ${skuReal} -> Enviado: 0\n`;
                     }
                     continue;
                 }
@@ -1342,53 +1345,55 @@ app.get('/api/exportar-upseller', async (req, res) => {
                 const quantidadeReal = parseInt(produtoBling.saldoFisicoTotal) || 0;
                 let quantidadeUpSeller = 0;
 
-                // Kit com match no Bling — sempre envia 100
                 if (/kit/i.test(skuReal)) {
                     quantidadeUpSeller = 100;
                     qtdKit++;
-                    logConteudo += `[KIT] ${skuReal} — real: ${quantidadeReal} → 100 (kit)\n`;
-                } else if (quantidadeReal > 10) {
+                    logKits += `- ${skuReal} | Real: ${quantidadeReal} -> Enviado: 100\n`;
+                } else if (quantidadeReal >= LIMIAR_SEGURANCA) {
                     quantidadeUpSeller = 2000 + quantidadeReal;
                     qtdAtivo++;
-                    logConteudo += `[ATIVO] ${skuReal} — real: ${quantidadeReal} → ${quantidadeUpSeller}\n`;
+                    logRepostos += `- ${skuReal.padEnd(25)} | Real: ${quantidadeReal.toString().padStart(3)} -> Enviado: ${quantidadeUpSeller}\n`;
                 } else {
                     quantidadeUpSeller = quantidadeReal;
                     qtdZerado++;
-                    logConteudo += `[BAIXO] ${skuReal} — real: ${quantidadeReal} → ${quantidadeUpSeller} (≤10, mantém real)\n`;
+                    logBaixos += `- ${skuReal.padEnd(25)} | Real: ${quantidadeReal.toString().padStart(3)} -> Enviado: ${quantidadeUpSeller}\n`;
                 }
 
                 dadosPlanilha.push([skuReal, "", quantidadeUpSeller, ""]);
             }
         } else {
-            // ====== MODO LEGADO (geração de SKU a partir do Bling) ======
-            console.log(`   [UpSeller] Modo LEGADO: gerando SKUs a partir dos nomes Bling`);
-            logConteudo += `MODO: Geração automática de SKU (sem catálogo UpSeller)\n\n`;
-
+            // Lógica fallback (Legado)
             for (const p of produtos) {
                 const skuUpSeller = blingParaSkuUpSeller(p.descricao);
-
                 if (!skuUpSeller) {
                     qtdIgnorados++;
                     continue;
                 }
 
-                const skuLimpo = skuUpSeller
-                    .replace(/[\u200B\u200C\u200D\uFEFF\u00A0]/g, '')
-                    .trim();
+                // BARREIRA DE FERRO: Se tiver filtro ativo, a REF do SKU tem que ser exatamente igual
+                if (refsQuery && refsQuery.length > 0) {
+                    const refDoSku = extrairRefEstrita(skuUpSeller);
+                    if (!refDoSku || !refsQuery.includes(refDoSku)) {
+                        continue; // Pula silenciosamente
+                    }
+                }
 
+                const skuLimpo = skuUpSeller.replace(/[\u200B\u200C\u200D\uFEFF\u00A0]/g, '').trim();
                 const quantidadeReal = parseInt(p.saldoFisicoTotal) || 0;
                 let quantidadeUpSeller = 0;
 
-                // Kit — sempre envia 100
                 if (/kit/i.test(skuLimpo)) {
                     quantidadeUpSeller = 100;
                     qtdKit++;
-                } else if (quantidadeReal > 10) {
+                    logKits += `- ${skuLimpo} | Real: ${quantidadeReal} -> Enviado: 100\n`;
+                } else if (quantidadeReal >= LIMIAR_SEGURANCA) {
                     quantidadeUpSeller = 2000 + quantidadeReal;
                     qtdAtivo++;
+                    logRepostos += `- ${skuLimpo.padEnd(25)} | Real: ${quantidadeReal.toString().padStart(3)} -> Enviado: ${quantidadeUpSeller}\n`;
                 } else {
                     quantidadeUpSeller = quantidadeReal;
                     qtdZerado++;
+                    logBaixos += `- ${skuLimpo.padEnd(25)} | Real: ${quantidadeReal.toString().padStart(3)} -> Enviado: ${quantidadeUpSeller}\n`;
                 }
 
                 dadosPlanilha.push([skuLimpo, "", quantidadeUpSeller, ""]);
@@ -1397,62 +1402,58 @@ app.get('/api/exportar-upseller', async (req, res) => {
 
         const totalExportados = qtdAtivo + qtdZerado;
 
-        logConteudo += `\n====================================================\n`;
-        logConteudo += `RESUMO:\n`;
-        logConteudo += `- SKUs ATIVOS (estoque >10, enviado 2000+real): ${qtdAtivo}\n`;
-        logConteudo += `- SKUs BAIXOS (estoque ≤10, enviado estoque real): ${qtdZerado}\n`;
-        if (qtdKit > 0) logConteudo += `- SKUs KIT (enviado 100): ${qtdKit}\n`;
-        if (qtdSemMatch > 0) logConteudo += `- SKUs SEM MATCH no Bling (zerados na UpSeller): ${qtdSemMatch}\n`;
-        logConteudo += `- Ignorados: ${qtdIgnorados}\n`;
-        logConteudo += `- Total de linhas na planilha: ${totalExportados + qtdSemMatch + qtdKit}\n`;
-        logConteudo += `====================================================\n`;
+        // Se o lote estiver vazio após o filtro
+        if (refsQuery && totalExportados + qtdSemMatch + qtdKit === 0) {
+             return res.status(404).json({ erro: `A referência ${refsQuery.join(', ')} não foi localizada no catálogo.` });
+        }
 
-        console.log(`   [UpSeller] ${totalExportados} SKUs convertidos. ${qtdIgnorados} produtos-pai ignorados.`);
+        // Montagem Final do Relatório de Auditoria
+        let relatorioFinal = `====================================================\n`;
+        relatorioFinal += `📊 RELATÓRIO DE AUDITORIA E EXPORTAÇÃO UPSELLER\n`;
+        relatorioFinal += `====================================================\n`;
+        relatorioFinal += `Data da Geração: ${new Date().toLocaleString('pt-BR')}\n`;
+        relatorioFinal += `Lote Processado: ${refsQuery ? refsQuery.join(', ') : 'Catálogo Completo'}\n`;
+        relatorioFinal += `Regra Base.....: >= ${LIMIAR_SEGURANCA} (Ativa Máscara +2000) | < ${LIMIAR_SEGURANCA} (Envia Real)\n`;
+        relatorioFinal += `====================================================\n\n`;
+        
+        relatorioFinal += `RESUMO ESTATÍSTICO:\n`;
+        relatorioFinal += `- Peças Repostas (Máscara ativa).....: ${qtdAtivo}\n`;
+        relatorioFinal += `- Peças Baixas/Zeradas (Saldo real)..: ${qtdZerado}\n`;
+        relatorioFinal += `- Peças tipo Kit.....................: ${qtdKit}\n`;
+        relatorioFinal += `- Ignorados (Sem match/Inválidos)....: ${qtdSemMatch}\n`;
+        relatorioFinal += `----------------------------------------------------\n\n`;
 
-        // Gera planilha via AOA (garante cabeçalho exato com \n)
+        if (qtdAtivo > 0) relatorioFinal += logRepostos;
+        if (qtdZerado > 0) relatorioFinal += logBaixos;
+        if (qtdKit > 0) relatorioFinal += logKits;
+        if (qtdSemMatch > 0) relatorioFinal += logSemMatch;
+
         const worksheet = xlsx.utils.aoa_to_sheet(dadosPlanilha);
         const workbook = xlsx.utils.book_new();
         xlsx.utils.book_append_sheet(workbook, worksheet, "Sheet1");
         const excelBuffer = xlsx.write(workbook, { bookType: 'xlsx', type: 'buffer' });
 
         const dataAtual = new Date().toISOString().slice(0,10);
-        res.setHeader('Content-Disposition', `attachment; filename="UpSeller_Exportacao_${dataAtual}.zip"`);
+        const nomeRef = refsQuery ? `_Lote` : `_Completo`;
+        
+        res.setHeader('Content-Disposition', `attachment; filename="UpSeller_Exportacao${nomeRef}_${dataAtual}.zip"`);
         res.setHeader('Content-Type', 'application/zip');
 
         const archive = archiver('zip', { zlib: { level: 9 } });
         archive.on('error', function(err) { throw err; });
         archive.pipe(res);
-        archive.append(excelBuffer, { name: `Update_warehouse_SKU_${dataAtual}.xlsx` });
-        archive.append(logConteudo, { name: `Relatorio_Seguranca.txt` });
+        
+        archive.append(excelBuffer, { name: `Update_warehouse_SKU${nomeRef}_${dataAtual}.xlsx` });
+        archive.append(relatorioFinal, { name: `Relatorio_Auditoria_${dataAtual}.txt` });
+        
         await archive.finalize();
 
-        console.log(`✅ [UpSeller] ZIP gerado com ${totalExportados} SKUs!`);
+        console.log(`✅ [UpSeller] ZIP com Relatório de Auditoria gerado!`);
 
     } catch (e) {
         console.error("❌ Erro ao exportar ZIP UpSeller:", e.message);
         res.status(500).json({ erro: "Erro interno ao gerar o pacote ZIP." });
     }
-});
-
-
-// Rota de teste — verifica se o token do Bling funciona
-app.get('/api/teste-bling', async (req, res) => {
-  if (process.env.NODE_ENV === 'production') return res.status(404).json({ erro: 'Não encontrado' });
-  try {
-    console.log("   [Teste] Verificando conexão com o Bling...");
-    const token = await obterAccessToken();
-    const resp = await axios.get("https://www.bling.com.br/Api/v3/produtos", {
-      headers: { Authorization: `Bearer ${token}` },
-      params: { pagina: 1, limite: 1 },
-      timeout: 10000
-    });
-    const qtd = resp.data?.data?.length ?? 0;
-    console.log(`   [Teste] OK! Bling respondeu com ${qtd} produto(s).`);
-    res.json({ ok: true, produtos: qtd, token: token.substring(0, 10) + "..." });
-  } catch (err) {
-    console.error(`   [Teste] FALHA: ${err.message}`);
-    res.status(500).json({ ok: false, erro: err.message, status: err.response?.status });
-  }
 });
 
 // ──────────────────────────────────────────────
@@ -1877,14 +1878,14 @@ app.get('/api/wms/produto/:codigo', async (req, res) => {
 
     // 1️⃣ Busca por código (SKU) no Bling
     try {
-      const respCodigo = await axios.get(`https://www.bling.com.br/Api/v3/produtos?codigo=${encodeURIComponent(codigoBipado)}`, { headers: { Authorization: `Bearer ${token}` } });
+      const respCodigo = await axios.get(`https://api.bling.com.br/Api/v3/produtos?codigo=${encodeURIComponent(codigoBipado)}`, { headers: { Authorization: `Bearer ${token}` } });
       if (respCodigo.data?.data?.length > 0) produto = respCodigo.data.data[0];
     } catch (e) {}
 
     // 2️⃣ Se não achou, busca por GTIN (código de barras / EAN)
     if (!produto) {
       try {
-        const respGtin = await axios.get(`https://www.bling.com.br/Api/v3/produtos?gtin=${encodeURIComponent(codigoBipado)}`, { headers: { Authorization: `Bearer ${token}` } });
+        const respGtin = await axios.get(`https://api.bling.com.br/Api/v3/produtos?gtin=${encodeURIComponent(codigoBipado)}`, { headers: { Authorization: `Bearer ${token}` } });
         if (respGtin.data?.data?.length > 0) produto = respGtin.data.data[0];
       } catch (e) {}
     }
@@ -1908,11 +1909,15 @@ app.get('/api/wms/produto/:codigo', async (req, res) => {
     // Busca saldo de estoque do depósito SEDE
     let estoqueAtual = 0;
     try {
-      const respEstoque = await axios.get(`https://www.bling.com.br/Api/v3/estoques/saldos?idsProdutos[]=${produto.id}`, { headers: { Authorization: `Bearer ${token}` } });
+      const respEstoque = await axios.get(`https://api.bling.com.br/Api/v3/estoques/saldos?idsProdutos[]=${produto.id}`, { headers: { Authorization: `Bearer ${token}` } });
       const saldoData = respEstoque.data?.data?.[0];
       if (saldoData?.depositos && Array.isArray(saldoData.depositos)) {
         const depSede = saldoData.depositos.find(d => d.id === DEPOSITO_SEDE_ID);
-        estoqueAtual = depSede?.saldoFisico ?? depSede?.saldoVirtual ?? 0;
+        if (depSede) {
+          estoqueAtual = depSede?.saldoFisico ?? depSede?.saldoVirtual ?? 0;
+        } else {
+          estoqueAtual = saldoData?.saldoFisicoTotal || 0;
+        }
       } else {
         estoqueAtual = saldoData?.saldoFisicoTotal || 0;
       }
@@ -1929,7 +1934,7 @@ app.get('/api/debug-depositos', async (req, res) => {
   if (process.env.NODE_ENV === 'production') return res.status(404).json({ erro: 'Não encontrado' });
   try {
     const token = await obterAccessToken();
-    const resp = await axios.get('https://www.bling.com.br/Api/v3/depositos', { headers: { Authorization: `Bearer ${token}` } });
+    const resp = await axios.get('https://api.bling.com.br/Api/v3/depositos', { headers: { Authorization: `Bearer ${token}` } });
     res.json(resp.data);
   } catch (e) {
     res.status(500).json({ erro: e.message });
@@ -1949,7 +1954,7 @@ app.post('/api/wms/entrada', async (req, res) => {
     const token = await obterAccessToken();
     const depositoId = DEPOSITO_SEDE_ID;
     const tipoOperacao = operacao === 'S' ? 'S' : 'E';
-    await axios.post("https://www.bling.com.br/Api/v3/estoques", {
+    await axios.post("https://api.bling.com.br/Api/v3/estoques", {
       produto: { id },
       deposito: { id: depositoId },
       operacao: tipoOperacao,
@@ -2272,7 +2277,7 @@ async function buscarEstoqueBlingTempoReal(referencia) {
   let temMais = true;
 
   while (temMais) {
-    const resp = await blingRequest("https://www.bling.com.br/Api/v3/produtos", token, {
+    const resp = await blingRequest("https://api.bling.com.br/Api/v3/produtos", token, {
       nome: `${referencia}-`,
       tipo: 'T',
       limite: 100,
@@ -2301,7 +2306,7 @@ async function buscarEstoqueBlingTempoReal(referencia) {
     const params = new URLSearchParams();
     for (const p of batch) params.append('idsProdutos[]', p.id);
 
-    const resp = await blingRequest("https://www.bling.com.br/Api/v3/estoques/saldos", token, params);
+    const resp = await blingRequest("https://api.bling.com.br/Api/v3/estoques/saldos", token, params);
     const saldos = resp.data?.data || [];
 
     for (const s of saldos) {
@@ -2394,7 +2399,7 @@ async function buscarSaldosPorDeposito(token, produtoIds, depositoId) {
     const idsParam = batch.join('&idsProdutos[]=');
     try {
       const resp = await blingRequest(
-        `https://www.bling.com.br/Api/v3/estoques/saldos?idsProdutos[]=${idsParam}`,
+        `https://api.bling.com.br/Api/v3/estoques/saldos?idsProdutos[]=${idsParam}`,
         token
       );
       const saldos = resp.data?.data || [];

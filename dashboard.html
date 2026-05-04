@@ -1,10 +1,12 @@
 <!DOCTYPE html>
 <html lang="pt-BR">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AJ Moda | Dashboard</title>
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>👗</text></svg>">
+    <link rel="icon"
+        href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>👗</text></svg>">
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;900&display=swap" rel="stylesheet">
     <script src="https://unpkg.com/lucide@latest"></script>
@@ -15,108 +17,334 @@
         }
     </script>
     <style>
-        body { font-family: 'Inter', sans-serif; background-color: #F8FAFC; }
-        .custom-scroll::-webkit-scrollbar { width: 5px; }
-        .custom-scroll::-webkit-scrollbar-track { background: transparent; }
-        .custom-scroll::-webkit-scrollbar-thumb { background-color: #cbd5e1; border-radius: 9999px; }
-        .custom-scroll::-webkit-scrollbar-thumb:hover { background-color: #94a3b8; }
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #F8FAFC;
+        }
+
+        .custom-scroll::-webkit-scrollbar {
+            width: 5px;
+        }
+
+        .custom-scroll::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        .custom-scroll::-webkit-scrollbar-thumb {
+            background-color: #cbd5e1;
+            border-radius: 9999px;
+        }
+
+        .custom-scroll::-webkit-scrollbar-thumb:hover {
+            background-color: #94a3b8;
+        }
     </style>
 </head>
+
 <body class="text-slate-800 flex flex-col h-screen overflow-hidden">
 
     <header class="bg-white border-b border-slate-200 shrink-0 z-20 shadow-sm">
         <div class="px-4 lg:px-6 py-3 flex flex-wrap items-center justify-between gap-3">
             <div class="flex items-center gap-2.5 min-w-0">
-                <div class="bg-indigo-600 p-2 rounded-lg shadow-sm shrink-0"><i data-lucide="store" class="text-white w-5 h-5"></i></div>
+                <div class="bg-indigo-600 p-2 rounded-lg shadow-sm shrink-0"><i data-lucide="store"
+                        class="text-white w-5 h-5"></i></div>
                 <div class="min-w-0">
-                    <h1 class="text-lg lg:text-xl font-black text-slate-900 tracking-tight leading-none truncate">AJ Moda <span class="text-indigo-500">|</span> Dashboard</h1>
-                    <p class="text-xs font-medium text-slate-400 mt-0.5 hidden sm:block">Gestão de Estoque & Marketplace</p>
+                    <h1 class="text-lg lg:text-xl font-black text-slate-900 tracking-tight leading-none truncate">AJ
+                        Moda <span class="text-indigo-500">|</span> Dashboard</h1>
+                    <p class="text-xs font-medium text-slate-400 mt-0.5 hidden sm:block">Gestão de Estoque & Marketplace
+                    </p>
                 </div>
             </div>
             <div class="flex flex-wrap items-center gap-2">
-                <button id="btnExportar" onclick="exportarUpSeller()" class="flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-2 rounded-lg font-bold text-xs transition shadow-sm" title="Regra: estoque real >10 = 2000+real | ≤10 = estoque real">
-                    <i data-lucide="file-archive" class="w-3.5 h-3.5"></i> <span class="hidden sm:inline">Exportar</span> ZIP
+                <button id="btnExportar" onclick="exportarUpSeller()"
+                    class="flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-2 rounded-lg font-bold text-xs transition shadow-sm"
+                    title="Regra: estoque real >10 = 2000+real | ≤10 = estoque real">
+                    <i data-lucide="file-archive" class="w-3.5 h-3.5"></i> <span
+                        class="hidden sm:inline">Exportar</span> ZIP
                 </button>
-                <input type="file" id="inputCatalogoUpSeller" accept=".xlsx,.xls,.csv" style="display:none" onchange="uploadCatalogoUpSeller(this)">
-                <button id="btnUploadCatalogo" onclick="document.getElementById('inputCatalogoUpSeller').click()" class="flex items-center gap-1.5 bg-violet-600 hover:bg-violet-700 text-white px-3 py-2 rounded-lg font-bold text-xs transition shadow-sm" title="Enviar planilha do armazém UpSeller">
+                <input type="file" id="inputCatalogoUpSeller" accept=".xlsx,.xls,.csv" style="display:none"
+                    onchange="uploadCatalogoUpSeller(this)">
+                <button id="btnUploadCatalogo" onclick="document.getElementById('inputCatalogoUpSeller').click()"
+                    class="flex items-center gap-1.5 bg-violet-600 hover:bg-violet-700 text-white px-3 py-2 rounded-lg font-bold text-xs transition shadow-sm"
+                    title="Enviar planilha do armazém UpSeller">
                     <i data-lucide="upload" class="w-3.5 h-3.5"></i> <span id="btnUploadTexto">Catálogo UpSeller</span>
                 </button>
-                <button id="btnAlerta" onclick="dispararAlertaManual()" class="flex items-center gap-1.5 bg-rose-600 hover:bg-rose-700 text-white px-3 py-2 rounded-lg font-bold text-xs transition shadow-sm">
-                    <i data-lucide="send" id="btnAlertaIcon" class="w-3.5 h-3.5"></i> <span class="hidden sm:inline">Alerta</span> WhatsApp
+                <button id="btnAlerta" onclick="dispararAlertaManual()"
+                    class="flex items-center gap-1.5 bg-rose-600 hover:bg-rose-700 text-white px-3 py-2 rounded-lg font-bold text-xs transition shadow-sm">
+                    <i data-lucide="send" id="btnAlertaIcon" class="w-3.5 h-3.5"></i> <span
+                        class="hidden sm:inline">Alerta</span> WhatsApp
                 </button>
             </div>
         </div>
 
         <div class="px-4 lg:px-6 pb-3 flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
             <div class="flex bg-slate-100 p-1 rounded-lg overflow-x-auto shrink-0">
-                <button onclick="mudarFiltro('todos', this)" class="filtro-btn px-3 py-1.5 text-xs font-semibold rounded-md bg-white shadow-sm text-indigo-700 transition whitespace-nowrap">
+                <button onclick="mudarFiltro('todos', this)"
+                    class="filtro-btn px-3 py-1.5 text-xs font-semibold rounded-md bg-white shadow-sm text-indigo-700 transition whitespace-nowrap">
                     Todos
                 </button>
-                <button onclick="mudarFiltro('alerta', this)" class="filtro-btn px-3 py-1.5 text-xs font-semibold rounded-md text-slate-600 hover:text-slate-900 transition flex items-center gap-1 whitespace-nowrap">
+                <button onclick="mudarFiltro('alerta', this)"
+                    class="filtro-btn px-3 py-1.5 text-xs font-semibold rounded-md text-slate-600 hover:text-slate-900 transition flex items-center gap-1 whitespace-nowrap">
                     <i data-lucide="alert-triangle" class="w-3 h-3 text-rose-500"></i> Crítico
                 </button>
-                <button onclick="mudarFiltro('conjuntos', this)" class="filtro-btn px-3 py-1.5 text-xs font-semibold rounded-md text-slate-600 hover:text-slate-900 transition flex items-center gap-1 whitespace-nowrap">
+                <button onclick="mudarFiltro('conjuntos', this)"
+                    class="filtro-btn px-3 py-1.5 text-xs font-semibold rounded-md text-slate-600 hover:text-slate-900 transition flex items-center gap-1 whitespace-nowrap">
                     <i data-lucide="shirt" class="w-3 h-3 text-emerald-500"></i> Conjuntos
                 </button>
             </div>
             <div class="relative flex-1 min-w-0">
                 <i data-lucide="search" class="absolute left-3 top-2 text-slate-400 w-4 h-4"></i>
-                <input type="text" id="searchInput" placeholder="Ref exata (ex: 41), nome ou cor..." class="w-full pl-9 pr-4 py-1.5 bg-slate-100 border-2 border-transparent rounded-lg font-medium text-sm focus:bg-white focus:border-indigo-500 outline-none transition">
+                <input type="text" id="searchInput" placeholder="Ref exata (ex: 41), nome ou cor..."
+                    class="w-full pl-9 pr-4 py-1.5 bg-slate-100 border-2 border-transparent rounded-lg font-medium text-sm focus:bg-white focus:border-indigo-500 outline-none transition">
             </div>
         </div>
     </header>
-
     <main class="flex-1 overflow-y-auto custom-scroll">
         <div class="p-4 lg:p-6">
-            
-            <div id="sync-panel" class="bg-white border border-slate-200 rounded-xl p-4 mb-6 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 shadow-sm shrink-0">
+
+            <div id="sync-panel"
+                class="bg-white border border-slate-200 rounded-xl p-4 mb-6 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 shadow-sm shrink-0">
                 <div>
-                    <h4 class="text-sm font-bold text-slate-800 flex items-center gap-1.5 mb-1"><i data-lucide="refresh-cw" class="w-4 h-4 text-indigo-500"></i> Status do Estoque (Bling)</h4>
-                    <p class="text-xs text-slate-500">Última atualização: <strong id="lbl-ultima-sync" class="text-slate-700">Carregando...</strong></p>
-                    <p class="text-xs text-slate-500 mt-0.5">Próxima atualização em: <strong id="lbl-proxima-sync" class="text-indigo-600 font-bold">--:--</strong></p>
+                    <h4 class="text-sm font-bold text-slate-800 flex items-center gap-1.5 mb-1"><i
+                            data-lucide="refresh-cw" class="w-4 h-4 text-indigo-500"></i> Status do Estoque (Bling)</h4>
+                    <p class="text-xs text-slate-500">Última atualização: <strong id="lbl-ultima-sync"
+                            class="text-slate-700">Carregando...</strong></p>
+                    <p class="text-xs text-slate-500 mt-0.5">Próxima atualização em: <strong id="lbl-proxima-sync"
+                            class="text-indigo-600 font-bold">--:--</strong></p>
                 </div>
-                <button id="btn-forcar-sync" onclick="forcarAtualizacao()" class="flex items-center gap-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 px-4 py-2 rounded-lg font-bold text-xs transition shadow-sm whitespace-nowrap w-full sm:w-auto justify-center">
-                    <i data-lucide="rotate-cw" id="btn-sync-icon" class="w-3.5 h-3.5"></i> <span>Forçar Atualização</span>
+                <button id="btn-forcar-sync" onclick="forcarAtualizacao()"
+                    class="flex items-center gap-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 px-4 py-2 rounded-lg font-bold text-xs transition shadow-sm whitespace-nowrap w-full sm:w-auto justify-center">
+                    <i data-lucide="rotate-cw" id="btn-sync-icon" class="w-3.5 h-3.5"></i> <span>Forçar
+                        Atualização</span>
                 </button>
             </div>
+
+            <!-- NOVA FEATURE: Exportação em Lote UpSeller -->
+            <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm mb-6 mt-4">
+                <h3 class="text-sm font-bold text-slate-800 mb-1 flex items-center gap-2">
+                    <i data-lucide="layers" class="w-4 h-4 text-indigo-600"></i> Fila de Reposição (UpSeller)
+                </h3>
+                <p class="text-xs text-slate-500 mb-3">Digite as referências e aperte <kbd
+                        class="bg-slate-100 border border-slate-300 rounded px-1 text-[10px]">Enter</kbd></p>
+
+                <div class="flex flex-col sm:flex-row gap-3">
+                    <div class="flex-1 flex flex-wrap items-center gap-2 p-2 border-2 border-indigo-500 rounded-lg bg-white min-h-[42px]"
+                        id="filaContainer">
+                        <input type="text" id="inputFilaRef"
+                            class="flex-1 min-w-[120px] outline-none bg-transparent text-sm text-slate-700"
+                            placeholder="Ex: 104, 31">
+                    </div>
+                    <button id="btnExportarFila" onclick="exportarFilaLote()"
+                        class="flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-5 py-2 rounded-lg font-bold text-sm transition shadow-sm shrink-0">
+                        <i data-lucide="download-cloud" class="w-4 h-4"></i> Exportar Lote
+                    </button>
+                </div>
+            </div>
+
             <div id="loader" class="flex flex-col items-center justify-center py-20">
                 <i data-lucide="loader-2" class="w-8 h-8 text-indigo-500 animate-spin mb-3"></i>
                 <p class="text-slate-400 font-medium text-sm">Sincronizando com o Bling...</p>
             </div>
-            <div id="produtosGrid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 hidden"></div>
+            <div id="produtosGrid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 hidden">
+            </div>
         </div>
     </main>
 
-    <div id="modalProduto" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm hidden z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">
-        <div class="bg-white rounded-t-2xl sm:rounded-2xl shadow-xl w-full sm:max-w-4xl max-h-[90vh] flex flex-col overflow-hidden">
+    <div id="modalProduto"
+        class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm hidden z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">
+        <div
+            class="bg-white rounded-t-2xl sm:rounded-2xl shadow-xl w-full sm:max-w-4xl max-h-[90vh] flex flex-col overflow-hidden">
             <div class="p-4 lg:p-5 border-b border-slate-200 flex justify-between items-center bg-slate-50 shrink-0">
-                <div class="min-w-0 pr-4">
-                    <span id="modalRef" class="text-[10px] font-bold text-indigo-500 uppercase tracking-wider bg-indigo-100 px-2 py-0.5 rounded hidden">Ref: --</span>
-                    <h2 id="modalTitle" class="text-lg lg:text-xl font-black text-slate-800 leading-tight mt-1 break-words">Nome do Produto</h2>
+                <div class="min-w-0 pr-4 flex items-center gap-3">
+                    <span id="modalRef"
+                        class="text-xs font-bold text-indigo-700 bg-indigo-100 px-2.5 py-1 rounded-md hidden shadow-sm border border-indigo-200">--</span>
+                    <h2 id="modalTitle" class="text-lg lg:text-xl font-black text-slate-800 leading-tight break-words">
+                        Nome do Produto</h2>
                 </div>
-                <button onclick="fecharModal()" class="p-2 hover:bg-slate-200 rounded-full transition text-slate-500 shrink-0"><i data-lucide="x" class="w-5 h-5"></i></button>
+                <div class="flex items-center gap-2 shrink-0">
+                    <!-- Botão de Exportação Direta do Produto -->
+                    <button id="btnExportarModal" onclick="exportarRefDoModal()"
+                        class="flex items-center gap-1.5 bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-md font-bold text-xs transition shadow-sm"
+                        title="Exportar apenas esta referência para UpSeller">
+                        <i data-lucide="download-cloud" class="w-4 h-4"></i> Exportar
+                    </button>
+                    <button onclick="fecharModal()"
+                        class="p-1.5 hover:bg-slate-200 rounded-full transition text-slate-500"><i data-lucide="x"
+                            class="w-5 h-5"></i></button>
+                </div>
             </div>
             <div class="p-4 lg:p-6 overflow-y-auto flex-1 custom-scroll flex flex-col lg:flex-row gap-6">
                 <div class="flex-1 flex flex-col min-w-0">
-                    <h3 class="text-sm font-bold mb-3 text-slate-500 flex items-center gap-1.5"><i data-lucide="bar-chart-2" class="w-4 h-4"></i> Estoque por Variação</h3>
+                    <h3 class="text-sm font-bold mb-3 text-slate-500 flex items-center gap-1.5"><i
+                            data-lucide="bar-chart-2" class="w-4 h-4"></i> Estoque por Variação</h3>
                     <div class="flex-1 min-h-[250px] w-full bg-slate-50 border border-slate-100 rounded-xl p-3">
                         <canvas id="variacoesChart"></canvas>
                     </div>
                 </div>
                 <div class="w-full lg:w-80 flex flex-col shrink-0">
-                    <h3 class="text-sm font-bold mb-3 text-slate-500 flex items-center gap-1.5"><i data-lucide="list" class="w-4 h-4"></i> Variações</h3>
-                    <div id="modalVariacoesList" class="space-y-2 overflow-y-auto custom-scroll flex-1 max-h-[350px]"></div>
+                    <h3 class="text-sm font-bold mb-3 text-slate-500 flex items-center gap-1.5"><i data-lucide="list"
+                            class="w-4 h-4"></i> Variações</h3>
+                    <div id="modalVariacoesList" class="space-y-2 overflow-y-auto custom-scroll flex-1 max-h-[350px]">
+                    </div>
                 </div>
             </div>
         </div>
     </div>
 
     <script>
+        window.abrirModal = function (index) {
+            const grupo = window.gruposExibidos[index];
+            if (!grupo) return;
+
+            document.getElementById('modalTitle').innerText = grupo.nome;
+            const badgeRef = document.getElementById('modalRef');
+            const btnExportar = document.getElementById('btnExportarModal');
+
+            // Armazena a referência para o botão de exportar via dataset (eliminando escopo global)
+            if (grupo.ref) {
+                btnExportar.setAttribute('data-ref', grupo.ref);
+                badgeRef.innerText = `REF: ${grupo.ref}`;
+                badgeRef.classList.remove('hidden');
+                badgeRef.classList.add('inline-flex');
+                btnExportar.classList.remove('hidden');
+            } else {
+                btnExportar.setAttribute('data-ref', '');
+                badgeRef.classList.add('hidden');
+                badgeRef.classList.remove('inline-flex');
+                btnExportar.classList.add('hidden'); // Esconde se não tiver ref
+            }
+
+            grupo.variacoes.sort((a, b) => b.saldoFisicoTotal - a.saldoFisicoTotal);
+            const labels = grupo.variacoes.map(v => `${v.cor} (${v.tam})`);
+            const data = grupo.variacoes.map(v => v.saldoFisicoTotal);
+            const bgColors = data.map(val => val <= 10 ? '#F43F5E' : '#4F46E5');
+            const ctx = document.getElementById('variacoesChart').getContext('2d');
+
+            if (chartInstance) chartInstance.destroy();
+            chartInstance = new Chart(ctx, {
+                type: 'bar',
+                data: { labels: labels, datasets: [{ label: 'Qtd', data: data, backgroundColor: bgColors, borderRadius: 6 }] },
+                options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true } } }
+            });
+
+            const listHtml = grupo.variacoes.map(v => {
+                const isAlerta = v.saldoFisicoTotal <= 10;
+                return `
+        <div class="p-3 bg-white border border-slate-200 rounded-lg shadow-sm flex justify-between items-center hover:border-indigo-200 transition">
+            <div class="min-w-0 flex-1 pr-3">
+                <p class="text-[10px] text-slate-400 font-bold mb-0.5">SKU: ${v.codigo || 'S/COD'}</p>
+                <p class="text-sm font-bold text-slate-800 break-words">${v.cor} <span class="text-slate-300">|</span> Tam: ${v.tam}</p>
+            </div>
+            <div class="flex items-center gap-2 shrink-0">
+                <span class="px-2 py-1 text-xs font-bold rounded ${isAlerta ? 'bg-rose-100 text-rose-700 border border-rose-200' : 'bg-emerald-100 text-emerald-700 border border-emerald-200'}">${v.saldoFisicoTotal} un.</span>
+                <button onclick="event.stopPropagation(); copiarDados('${v.codigo}', '${grupo.nome.replace(/'/g, "\\'")}', '${grupo.ref || ''}', '${v.cor}', '${v.tam}', '${v.saldoFisicoTotal}')" class="text-indigo-500 hover:text-indigo-700 p-1 transition" title="Copiar dados"><i data-lucide="copy" class="w-3.5 h-3.5"></i></button>
+            </div>
+        </div>`;
+            }).join('');
+
+            document.getElementById('modalVariacoesList').innerHTML = listHtml;
+            document.getElementById('modalProduto').classList.remove('hidden');
+            lucide.createIcons();
+        }
+
+        // Ação do Botão Exportar do Modal
+        window.exportarRefDoModal = function () {
+            const btn = document.getElementById('btnExportarModal');
+            const refProduto = btn.getAttribute('data-ref');
+
+            if (!refProduto || refProduto === 'undefined') {
+                alert("Este produto não possui uma Referência numérica cadastrada.");
+                return;
+            }
+
+            const iconOriginal = btn.innerHTML;
+            btn.innerHTML = `<i data-lucide="loader-2" class="w-4 h-4 animate-spin"></i> Zip...`;
+            btn.disabled = true;
+
+            // Dispara a requisição para o backend passando o parâmetro blindado
+            window.location.href = `/api/exportar-upseller?refs=${refProduto}`;
+
+            setTimeout(() => {
+                btn.innerHTML = iconOriginal;
+                btn.disabled = false;
+                lucide.createIcons();
+            }, 3000);
+        }
+    </script>
+    <script>
         lucide.createIcons();
         let todosOsProdutos = [];
         let produtosAgrupados = [];
         let chartInstance = null;
         let abaAtiva = 'todos';
+
+        let filaReposicao = [];
+
+        document.getElementById('inputFilaRef').addEventListener('keydown', function (e) {
+            if (e.key === 'Enter' || e.key === ',') {
+                e.preventDefault();
+                let val = this.value.trim().replace(/^0+/, '').replace(/,/g, '');
+                if (val && !filaReposicao.includes(val)) {
+                    filaReposicao.push(val);
+                    renderizarFila();
+                }
+                this.value = '';
+            }
+        });
+
+        function renderizarFila() {
+            const container = document.getElementById('filaContainer');
+            const input = document.getElementById('inputFilaRef');
+
+            // Remove todos os chips antigos, mas preserva o input
+            Array.from(container.children).forEach(child => {
+                if (child.id !== 'inputFilaRef') container.removeChild(child);
+            });
+
+            filaReposicao.forEach(ref => {
+                const chip = document.createElement('span');
+                chip.className = 'flex items-center gap-1 bg-indigo-100 text-indigo-700 px-2 py-1 rounded text-xs font-bold border border-indigo-200';
+                chip.innerHTML = `${ref} <i data-lucide="x" class="w-3 h-3 cursor-pointer hover:text-rose-500" onclick="removerDaFila('${ref}')"></i>`;
+                container.insertBefore(chip, input);
+            });
+            if (window.lucide) lucide.createIcons();
+            input.focus();
+        }
+
+        window.removerDaFila = function (ref) {
+            filaReposicao = filaReposicao.filter(r => r !== ref);
+            renderizarFila();
+        }
+
+        window.exportarFilaLote = function () {
+            const inputVal = document.getElementById('inputFilaRef').value.trim().replace(/^0+/, '');
+
+            // Inteligência: Se ele digitou algo e esqueceu de dar Enter, adiciona automaticamente
+            if (inputVal && !filaReposicao.includes(inputVal)) {
+                filaReposicao.push(inputVal);
+                document.getElementById('inputFilaRef').value = '';
+                renderizarFila();
+            }
+
+            if (filaReposicao.length === 0) {
+                alert("Gestão de Risco: Adicione pelo menos uma referência na fila antes de exportar.");
+                return;
+            }
+
+            const btn = document.getElementById('btnExportarFila');
+            const iconOriginal = btn.innerHTML;
+            btn.innerHTML = `<i data-lucide="loader-2" class="w-4 h-4 animate-spin"></i> Processando...`;
+            btn.disabled = true;
+
+            const refsParam = filaReposicao.join(',');
+            window.location.href = `/api/exportar-upseller?refs=${refsParam}`;
+
+            setTimeout(() => {
+                btn.innerHTML = iconOriginal;
+                btn.disabled = false;
+                if (window.lucide) lucide.createIcons();
+            }, 3000);
+        }
 
         async function exportarUpSeller() {
             const btn = document.getElementById('btnExportar');
@@ -131,7 +359,7 @@
                 const url = window.URL.createObjectURL(blob);
                 const a = document.createElement('a');
                 a.href = url;
-                a.download = `UpSeller_Estoque_${new Date().toISOString().slice(0,10)}.zip`;
+                a.download = `UpSeller_Estoque_${new Date().toISOString().slice(0, 10)}.zip`;
                 document.body.appendChild(a);
                 a.click();
                 a.remove();
@@ -182,7 +410,7 @@
                 btn.classList.replace('bg-violet-600', 'bg-green-600');
                 btn.classList.replace('hover:bg-violet-700', 'hover:bg-green-700');
             }
-        }).catch(() => {});
+        }).catch(() => { });
 
         async function dispararAlertaManual() {
             const btn = document.getElementById('btnAlerta');
@@ -236,7 +464,7 @@
             return Object.values(grupos);
         }
 
-        window.copiarDados = function(sku, nome, ref, cor, tam, estoque) {
+        window.copiarDados = function (sku, nome, ref, cor, tam, estoque) {
             const nomeFinal = ref && ref !== 'undefined' ? `${ref}- ${nome}` : nome;
             const texto = `SKU: ${sku}\nProduto: ${nomeFinal}\nCor: ${cor}\nTamanho: ${tam}\nEstoque Atual: ${estoque} un.`;
             navigator.clipboard.writeText(texto).then(() => alert("Dados Copiados!"));
@@ -290,10 +518,10 @@
                         return grupo.variacoes.some(v => v.codigo && v.codigo.toLowerCase() === palavra);
                     } else {
                         return (grupo.nome && grupo.nome.toLowerCase().includes(palavra)) ||
-                               grupo.variacoes.some(v =>
-                                   (v.cor && v.cor.toLowerCase().includes(palavra)) ||
-                                   (v.tam && v.tam.toLowerCase().includes(palavra))
-                               );
+                            grupo.variacoes.some(v =>
+                                (v.cor && v.cor.toLowerCase().includes(palavra)) ||
+                                (v.tam && v.tam.toLowerCase().includes(palavra))
+                            );
                     }
                 });
                 if (!matchTexto) return false;
@@ -303,14 +531,14 @@
                 if (abaAtiva === 'conjuntos') return isCritico && isConjunto;
                 return true;
             });
-            if(abaAtiva !== 'todos') {
-                filtrados.sort((a,b) => Math.min(...a.variacoes.map(v=>v.saldoFisicoTotal)) - Math.min(...b.variacoes.map(v=>v.saldoFisicoTotal)));
+            if (abaAtiva !== 'todos') {
+                filtrados.sort((a, b) => Math.min(...a.variacoes.map(v => v.saldoFisicoTotal)) - Math.min(...b.variacoes.map(v => v.saldoFisicoTotal)));
             }
             window.gruposExibidos = filtrados;
             renderizarGrupos(filtrados);
         }
 
-        window.mudarFiltro = function(novaAba, botaoClicado) {
+        window.mudarFiltro = function (novaAba, botaoClicado) {
             abaAtiva = novaAba;
             document.querySelectorAll('.filtro-btn').forEach(btn => {
                 btn.classList.remove('bg-white', 'shadow-sm', 'text-indigo-700');
@@ -323,50 +551,9 @@
 
         document.getElementById('searchInput').addEventListener('input', aplicarFiltros);
 
-        window.abrirModal = function(index) {
-            const grupo = window.gruposExibidos[index];
-            if(!grupo) return;
-            document.getElementById('modalTitle').innerText = grupo.nome;
-            const badgeRef = document.getElementById('modalRef');
-            if (grupo.ref) {
-                badgeRef.innerText = `Ref: ${grupo.ref}`;
-                badgeRef.classList.remove('hidden');
-                badgeRef.classList.add('inline-block');
-            } else {
-                badgeRef.classList.add('hidden');
-                badgeRef.classList.remove('inline-block');
-            }
-            grupo.variacoes.sort((a, b) => b.saldoFisicoTotal - a.saldoFisicoTotal);
-            const labels = grupo.variacoes.map(v => `${v.cor} (${v.tam})`);
-            const data = grupo.variacoes.map(v => v.saldoFisicoTotal);
-            const bgColors = data.map(val => val <= 10 ? '#F43F5E' : '#4F46E5');
-            const ctx = document.getElementById('variacoesChart').getContext('2d');
-            if (chartInstance) chartInstance.destroy();
-            chartInstance = new Chart(ctx, {
-                type: 'bar',
-                data: { labels: labels, datasets: [{ label: 'Qtd', data: data, backgroundColor: bgColors, borderRadius: 6 }] },
-                options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true } } }
-            });
-            const listHtml = grupo.variacoes.map(v => {
-                const isAlerta = v.saldoFisicoTotal <= 10;
-                return `
-                <div class="p-3 bg-white border border-slate-200 rounded-lg shadow-sm flex justify-between items-center hover:border-indigo-200 transition">
-                    <div class="min-w-0 flex-1 pr-3">
-                        <p class="text-[10px] text-slate-400 font-bold mb-0.5">SKU: ${v.codigo || 'S/COD'}</p>
-                        <p class="text-sm font-bold text-slate-800 break-words">${v.cor} <span class="text-slate-300">|</span> Tam: ${v.tam}</p>
-                    </div>
-                    <div class="flex items-center gap-2 shrink-0">
-                        <span class="px-2 py-1 text-xs font-bold rounded ${isAlerta ? 'bg-rose-100 text-rose-700 border border-rose-200' : 'bg-emerald-100 text-emerald-700 border border-emerald-200'}">${v.saldoFisicoTotal} un.</span>
-                        <button onclick="event.stopPropagation(); copiarDados('${v.codigo}', '${grupo.nome.replace(/'/g, "\\'")}', '${grupo.ref || ''}', '${v.cor}', '${v.tam}', '${v.saldoFisicoTotal}')" class="text-indigo-500 hover:text-indigo-700 p-1 transition" title="Copiar dados"><i data-lucide="copy" class="w-3.5 h-3.5"></i></button>
-                    </div>
-                </div>`;
-            }).join('');
-            document.getElementById('modalVariacoesList').innerHTML = listHtml;
-            document.getElementById('modalProduto').classList.remove('hidden');
-            lucide.createIcons();
-        }
 
-        window.fecharModal = function() { document.getElementById('modalProduto').classList.add('hidden'); }
+
+        window.fecharModal = function () { document.getElementById('modalProduto').classList.add('hidden'); }
 
         async function carregarDados() {
             try {
@@ -420,13 +607,13 @@
             }, 1000);
         }
 
-        window.forcarAtualizacao = async function() {
+        window.forcarAtualizacao = async function () {
             const btn = document.getElementById('btn-forcar-sync');
             const icon = document.getElementById('btn-sync-icon');
             btn.disabled = true;
             btn.classList.add('opacity-70', 'cursor-not-allowed');
             icon.classList.add('animate-spin');
-            
+
             try {
                 const res = await fetch('/api/forcar-sync', { method: 'POST' });
 
@@ -457,4 +644,5 @@
         carregarDados();
     </script>
 </body>
+
 </html>
