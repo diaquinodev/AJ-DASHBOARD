@@ -1274,13 +1274,11 @@ app.get('/api/exportar-upseller', async (req, res) => {
         console.log(`\n📦 [UpSeller] Iniciando Exportação... Limiar: ${LIMIAR_SEGURANCA}un`);
         if (refsQuery) console.log(`   [UpSeller] 🎯 LOTE ATIVADO (Barreira de Ferro): [${refsQuery.join(', ')}]`);
 
-        const token = await obterAccessToken();
-        const produtos = await buscarEstoque(token);
-        cacheProdutos = produtos;
-        ultimoCacheHora = Date.now();
+        // USO EXCLUSIVO DO CACHE LOCAL: Evita timeout do Ngrok e erro 429 da API Bling
+        const produtos = cacheProdutos;
 
         if (!produtos || produtos.length === 0) {
-            return res.status(404).json({ erro: "Nenhum produto encontrado no Bling." });
+            return res.status(404).json({ erro: "Nenhum produto encontrado no cache. Aguarde a sincronização em segundo plano." });
         }
 
         // Estruturas de Log de Auditoria
