@@ -1264,6 +1264,12 @@ app.get('/api/exportar-upseller', async (req, res) => {
     req.setTimeout(120000);
     res.setTimeout(120000);
     try {
+        // REGRA 1: CORTE DE REQUISIÇÃO (VELOCIDADE)
+        // Usa exclusivamente a variável global de cache (NENHUMA CHAMADA AO BLING AQUI)
+        if (!cacheProdutos || cacheProdutos.length === 0) {
+            return res.status(400).json({ erro: "Cache de produtos vazio. Aguarde a sincronização em segundo plano." });
+        }
+
         const LIMIAR_SEGURANCA = 30;
         
         // Extrai o array de referências (ex: ?refs=33,108,45) - LIMPO (sem zeros a esquerda)
@@ -1274,22 +1280,71 @@ app.get('/api/exportar-upseller', async (req, res) => {
         console.log(`\n📦 [UpSeller] Iniciando Exportação... Limiar: ${LIMIAR_SEGURANCA}un`);
         if (refsQuery) console.log(`   [UpSeller] 🎯 LOTE ATIVADO (Barreira de Ferro): [${refsQuery.join(', ')}]`);
 
-        // USO EXCLUSIVO DO CACHE LOCAL: Evita timeout do Ngrok e erro 429 da API Bling
-        const produtos = cacheProdutos;
-
-        if (!produtos || produtos.length === 0) {
-            return res.status(404).json({ erro: "Nenhum produto encontrado no cache. Aguarde a sincronização em segundo plano." });
+        const catalogoUpSeller = lerCatalogoUpSeller();
+        const skusUpSellerMap = new Set();
+        if (catalogoUpSeller && catalogoUpSeller.skus) {
+            catalogoUpSeller.skus.forEach(sku => {
+                const parsed = parseUpSellerSku(sku);
+                if (parsed) skusUpSellerMap.add(normalizarChaveMatch(parsed.ref, parsed.cor, parsed.tam));
+            });
         }
 
-        // Estruturas de Log de Auditoria
-        let logRepostos = `🟢 PEÇAS REPOSTAS (MÁSCARA ATIVADA | ESTOQUE >= ${LIMIAR_SEGURANCA})\n----------------------------------------------------\n`;
-        let logBaixos = `\n🔴 PEÇAS BAIXAS/ZERADAS (SALDO REAL | ESTOQUE < ${LIMIAR_SEGURANCA})\n----------------------------------------------------\n`;
-        let logKits = `\n⚠️ KITS (ENVIADO PADRÃO 100)\n----------------------------------------------------\n`;
-        let logSemMatch = `\n❌ SEM MATCH (ZERADOS POR SEGURANÇA)\n----------------------------------------------------\n`;
-        let logQuarentena = `\n⚠️ ANOMALIAS E QUARENTENA DE DADOS (AÇÃO NECESSÁRIA NO BLING/UPSELLER)\n----------------------------------------------------\n`;
+        // --- HIGIENE E QUARENTENA ---
+        // REGRA 2: QUARENTENA DE DUPLICATAS
+        // REGRA 3: SKUs ÓRFÃOS (GG ESCONDIDO)
+        const blingAgrupado = new Map();
+        for (const p of cacheProdutos) {
+            if (!p.descricao) continue;
+            const matchRef = p.descricao.match(/^(\d+)/);
+            if (!matchRef) continue;
+            const ref = matchRef[1].replace(/^0+/, '');
+            
+            // Filtra pela Barreira de Ferro
+            if (refsQuery && refsQuery.length > 0 && !refsQuery.includes(ref)) continue;
+            
+            const matchCor = p.descricao.match(/\bCOR[:\s]+([^,;]+)/i);
+            const cor = matchCor ? matchCor[1].trim() : '';
+            const matchTam = p.descricao.match(/\bTAM(?:ANHO)?[:\s]+([^,;\s]+)/i);
+            const tam = matchTam ? matchTam[1].trim() : '';
+            
+            // Só agrupa variações com cor
+            if (!cor) continue;
 
-        let qtdAtivo = 0, qtdZerado = 0, qtdIgnorados = 0, qtdSemMatch = 0, qtdKit = 0, qtdQuarentena = 0;
+            const chave = normalizarChaveMatch(ref, cor, tam);
+            if (!blingAgrupado.has(chave)) blingAgrupado.set(chave, []);
+            blingAgrupado.get(chave).push(p);
+        }
 
+        const anomaliasDuplicatas = new Set();
+        let logAnomalias = `\n⚠️ ANOMALIAS DETECTADAS (AÇÃO NECESSÁRIA NO BLING/UPSELLER)\n----------------------------------------------------\n`;
+        let qtdAnomalias = 0;
+
+        const mapaEstoqueReal = new Map();
+
+        for (const [chave, listaBling] of blingAgrupado.entries()) {
+            const ativos = listaBling.filter(p => p.tipo === 'V' || (p.tipo === 'P' && listaBling.length === 1));
+            
+            // REGRA 2: QUARENTENA DE DUPLICATAS
+            if (ativos.length > 1) {
+                qtdAnomalias++;
+                anomaliasDuplicatas.add(chave);
+                const codigos = ativos.map(v => v.codigo).join(', ');
+                const nomeVisual = ativos[0].descricao;
+                logAnomalias += `- DUPLICIDADE: "${nomeVisual}" possui ${ativos.length} SKUs ativos no Bling (${codigos}). Saldo zerado por segurança.\n`;
+                mapaEstoqueReal.set(chave, 0); // Força 0 na quarentena
+            } else if (ativos.length === 1) {
+                const estoqueReal = parseInt(ativos[0].saldoFisicoTotal) || 0;
+                mapaEstoqueReal.set(chave, estoqueReal);
+                
+                // REGRA 3: SKUs ÓRFÃOS (Existe no Bling, não existe na UpSeller)
+                if (!skusUpSellerMap.has(chave) && estoqueReal > 0) {
+                    qtdAnomalias++;
+                    logAnomalias += `- FALTA NA UPSELLER: "${ativos[0].descricao}" existe no Bling com ${estoqueReal} peças, mas não no catálogo UpSeller.\n`;
+                }
+            }
+        }
+
+        // --- GERAÇÃO DA PLANILHA ---
         const dadosPlanilha = [[
             "SKU*",
             "Estoque Baixo\n(Não será atualizado se não for preenchido)",
@@ -1297,79 +1352,26 @@ app.get('/api/exportar-upseller', async (req, res) => {
             "Custo Médio Atualizado\n(Não será atualizado se não for preenchido)"
         ]];
 
-        const catalogoUpSeller = lerCatalogoUpSeller();
-        const usarCatalogoReal = catalogoUpSeller && catalogoUpSeller.skus && catalogoUpSeller.skus.length > 0;
+        let logRepostos = `\n🟢 PEÇAS REPOSTAS (MÁSCARA ATIVADA | ESTOQUE >= ${LIMIAR_SEGURANCA})\n----------------------------------------------------\n`;
+        let logBaixos = `\n🔴 PEÇAS BAIXAS/ZERADAS (SALDO REAL | ESTOQUE < ${LIMIAR_SEGURANCA})\n----------------------------------------------------\n`;
+        let logKits = `\n⚠️ KITS (ENVIADO PADRÃO 100)\n----------------------------------------------------\n`;
+        let logSemMatch = `\n❌ SEM MATCH (ZERADOS POR SEGURANÇA)\n----------------------------------------------------\n`;
 
-        // Função utilitária para extrair a REF principal do SKU e tirar os zeros da frente
+        let qtdAtivo = 0, qtdZerado = 0, qtdIgnorados = 0, qtdSemMatch = 0, qtdKit = 0;
+
+        // Função utilitária para extrair a REF estrita
         const extrairRefEstrita = (sku) => {
             if (!sku) return null;
             const partes = sku.split('-');
             if (partes.length === 0) return null;
-            return partes[0].trim().replace(/^0+/, ''); // "0031" -> "31"
+            return partes[0].trim().replace(/^0+/, '');
         };
 
-        if (usarCatalogoReal) {
-            const mapaBling = construirMapaBling(produtos);
-
-            // --- INÍCIO QUARENTENA DE DADOS (REGRAS A e B) ---
-            const chavesEmQuarentena = new Set();
-            const upSellerSkusMap = new Set();
+        if (catalogoUpSeller && catalogoUpSeller.skus) {
             for (const skuReal of catalogoUpSeller.skus) {
-                const parsed = parseUpSellerSku(skuReal);
-                if (parsed) upSellerSkusMap.add(normalizarChaveMatch(parsed.ref, parsed.cor, parsed.tam));
-            }
-
-            const blingAgrupado = new Map();
-            for (const p of produtos) {
-                if (!p.descricao) continue;
-                const matchRef = p.descricao.match(/^(\d+)/);
-                if (!matchRef) continue;
-                const ref = matchRef[1].replace(/^0+/, '');
-                
-                if (refsQuery && refsQuery.length > 0 && !refsQuery.includes(ref)) continue;
-                
-                const matchCor = p.descricao.match(/\bCOR[:\s]+([^,;]+)/i);
-                if (!matchCor) continue;
-                const cor = matchCor[1].trim();
-                const matchTam = p.descricao.match(/\bTAM(?:ANHO)?[:\s]+([^,;\s]+)/i);
-                const tam = matchTam ? matchTam[1].trim() : '';
-                
-                const chave = normalizarChaveMatch(ref, cor, tam);
-                if (!blingAgrupado.has(chave)) blingAgrupado.set(chave, []);
-                blingAgrupado.get(chave).push(p);
-            }
-
-            for (const [chave, listaBling] of blingAgrupado.entries()) {
-                const ativos = listaBling.filter(p => p.tipo === 'V' || (p.tipo === 'P' && listaBling.length === 1));
-                
-                // REGRA B: Duplicidade
-                if (ativos.length > 1) {
-                    qtdQuarentena++;
-                    chavesEmQuarentena.add(chave);
-                    const codigos = ativos.map(v => v.codigo).join(', ');
-                    const nomeVisual = ativos[0].descricao;
-                    logQuarentena += `- DUPLICIDADE: "${nomeVisual}" possui ${ativos.length} SKUs ativos no Bling (${codigos}). Saldo zerado por segurança.\n`;
-                }
-                
-                // REGRA A: Órfãos
-                if (!upSellerSkusMap.has(chave) && ativos.length > 0) {
-                    const estoqueReal = ativos.reduce((acc, p) => acc + (parseInt(p.saldoFisicoTotal) || 0), 0);
-                    if (estoqueReal > 0) {
-                        qtdQuarentena++;
-                        const nomeVisual = ativos[0].descricao;
-                        logQuarentena += `- FALTA NA UPSELLER: "${nomeVisual}" existe no Bling com ${estoqueReal} peças, mas não no catálogo UpSeller.\n`;
-                    }
-                }
-            }
-            // --- FIM QUARENTENA DE DADOS ---
-
-            for (const skuReal of catalogoUpSeller.skus) {
-                // BARREIRA DE FERRO: Se tiver filtro ativo, a REF do SKU tem que ser exatamente igual
                 if (refsQuery && refsQuery.length > 0) {
                     const refDoSku = extrairRefEstrita(skuReal);
-                    if (!refDoSku || !refsQuery.includes(refDoSku)) {
-                        continue; // Pula silenciosamente, não é o produto que queremos
-                    }
+                    if (!refDoSku || !refsQuery.includes(refDoSku)) continue;
                 }
 
                 const parsed = parseUpSellerSku(skuReal);
@@ -1380,15 +1382,12 @@ app.get('/api/exportar-upseller', async (req, res) => {
 
                 const chaveUpSeller = normalizarChaveMatch(parsed.ref, parsed.cor, parsed.tam);
 
-                // APLICA QUARENTENA (Regra B)
-                if (chavesEmQuarentena.has(chaveUpSeller)) {
+                if (anomaliasDuplicatas.has(chaveUpSeller)) {
                     dadosPlanilha.push([skuReal, "", 0, ""]);
                     continue;
                 }
 
-                const produtoBling = buscarNoMapaBling(mapaBling, parsed.ref, parsed.cor, parsed.tam);
-
-                if (!produtoBling) {
+                if (!mapaEstoqueReal.has(chaveUpSeller)) {
                     if (/kit/i.test(skuReal)) {
                         qtdKit++;
                         dadosPlanilha.push([skuReal, "", 100, ""]);
@@ -1401,7 +1400,7 @@ app.get('/api/exportar-upseller', async (req, res) => {
                     continue;
                 }
 
-                const quantidadeReal = parseInt(produtoBling.saldoFisicoTotal) || 0;
+                const quantidadeReal = mapaEstoqueReal.get(chaveUpSeller);
                 let quantidadeUpSeller = 0;
 
                 if (/kit/i.test(skuReal)) {
@@ -1420,53 +1419,14 @@ app.get('/api/exportar-upseller', async (req, res) => {
 
                 dadosPlanilha.push([skuReal, "", quantidadeUpSeller, ""]);
             }
-        } else {
-            // Lógica fallback (Legado)
-            for (const p of produtos) {
-                const skuUpSeller = blingParaSkuUpSeller(p.descricao);
-                if (!skuUpSeller) {
-                    qtdIgnorados++;
-                    continue;
-                }
-
-                // BARREIRA DE FERRO: Se tiver filtro ativo, a REF do SKU tem que ser exatamente igual
-                if (refsQuery && refsQuery.length > 0) {
-                    const refDoSku = extrairRefEstrita(skuUpSeller);
-                    if (!refDoSku || !refsQuery.includes(refDoSku)) {
-                        continue; // Pula silenciosamente
-                    }
-                }
-
-                const skuLimpo = skuUpSeller.replace(/[\u200B\u200C\u200D\uFEFF\u00A0]/g, '').trim();
-                const quantidadeReal = parseInt(p.saldoFisicoTotal) || 0;
-                let quantidadeUpSeller = 0;
-
-                if (/kit/i.test(skuLimpo)) {
-                    quantidadeUpSeller = 100;
-                    qtdKit++;
-                    logKits += `- ${skuLimpo} | Real: ${quantidadeReal} -> Enviado: 100\n`;
-                } else if (quantidadeReal >= LIMIAR_SEGURANCA) {
-                    quantidadeUpSeller = 2000 + quantidadeReal;
-                    qtdAtivo++;
-                    logRepostos += `- ${skuLimpo.padEnd(25)} | Real: ${quantidadeReal.toString().padStart(3)} -> Enviado: ${quantidadeUpSeller}\n`;
-                } else {
-                    quantidadeUpSeller = quantidadeReal;
-                    qtdZerado++;
-                    logBaixos += `- ${skuLimpo.padEnd(25)} | Real: ${quantidadeReal.toString().padStart(3)} -> Enviado: ${quantidadeUpSeller}\n`;
-                }
-
-                dadosPlanilha.push([skuLimpo, "", quantidadeUpSeller, ""]);
-            }
         }
 
-        const totalExportados = qtdAtivo + qtdZerado;
-
-        // Se o lote estiver vazio após o filtro
-        if (refsQuery && totalExportados + qtdSemMatch + qtdKit === 0) {
+        const totalExportados = qtdAtivo + qtdZerado + qtdSemMatch + qtdKit;
+        if (refsQuery && totalExportados === 0) {
              return res.status(404).json({ erro: `A referência ${refsQuery.join(', ')} não foi localizada no catálogo.` });
         }
 
-        // Montagem Final do Relatório de Auditoria
+        // REGRA 4: NOVO RELATÓRIO TXT
         let relatorioFinal = `====================================================\n`;
         relatorioFinal += `📊 RELATÓRIO DE AUDITORIA E EXPORTAÇÃO UPSELLER\n`;
         relatorioFinal += `====================================================\n`;
@@ -1480,10 +1440,10 @@ app.get('/api/exportar-upseller', async (req, res) => {
         relatorioFinal += `- Peças Baixas/Zeradas (Saldo real)..: ${qtdZerado}\n`;
         relatorioFinal += `- Peças tipo Kit.....................: ${qtdKit}\n`;
         relatorioFinal += `- Ignorados (Sem match/Inválidos)....: ${qtdSemMatch}\n`;
-        relatorioFinal += `- Quarentena de Dados (Anomalias)....: ${qtdQuarentena}\n`;
-        relatorioFinal += `----------------------------------------------------\n\n`;
+        relatorioFinal += `- Anomalias (Duplicatas/Órfãos)......: ${qtdAnomalias}\n`;
+        relatorioFinal += `----------------------------------------------------\n`;
 
-        if (qtdQuarentena > 0) relatorioFinal += logQuarentena;
+        if (qtdAnomalias > 0) relatorioFinal += logAnomalias;
         if (qtdAtivo > 0) relatorioFinal += logRepostos;
         if (qtdZerado > 0) relatorioFinal += logBaixos;
         if (qtdKit > 0) relatorioFinal += logKits;
