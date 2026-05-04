@@ -1281,11 +1281,13 @@ app.get('/api/exportar-upseller', async (req, res) => {
         if (refsQuery) console.log(`   [UpSeller] 🎯 LOTE ATIVADO (Barreira de Ferro): [${refsQuery.join(', ')}]`);
 
         const catalogoUpSeller = lerCatalogoUpSeller();
-        const skusUpSellerMap = new Set();
+        const skusUpSellerMap = new Map();
         if (catalogoUpSeller && catalogoUpSeller.skus) {
-            catalogoUpSeller.skus.forEach(sku => {
+            catalogoUpSeller.skus.forEach(item => {
+                const sku = typeof item === 'string' ? item : item.sku;
+                const armazem = typeof item === 'string' ? '' : item.armazem;
                 const parsed = parseUpSellerSku(sku);
-                if (parsed) skusUpSellerMap.add(normalizarChaveMatch(parsed.ref, parsed.cor, parsed.tam));
+                if (parsed) skusUpSellerMap.set(normalizarChaveMatch(parsed.ref, parsed.cor, parsed.tam), { sku, armazem });
             });
         }
 
@@ -1317,7 +1319,11 @@ app.get('/api/exportar-upseller', async (req, res) => {
 
         const anomaliasDuplicatas = new Set();
         let logAnomalias = `\n⚠️ ANOMALIAS DETECTADAS (AÇÃO NECESSÁRIA NO BLING/UPSELLER)\n----------------------------------------------------\n`;
+        let logOrfaos = `\n⚠️ AÇÃO NECESSÁRIA: SKUS NÃO ENCONTRADOS NA UPSELLER (Cadastrar ou Corrigir Nome)\n---------------------------------------------------------------------------------\n`;
+        let logSemArmazem = `\n⚠️ AÇÃO NECESSÁRIA: SKUS SEM ARMAZÉM VINCULADO (Entrar na UpSeller e vincular Galpão)\n---------------------------------------------------------------------------------\n`;
         let qtdAnomalias = 0;
+        let qtdOrfaos = 0;
+        let qtdSemArmazem = 0;
 
         const mapaEstoqueReal = new Map();
 
@@ -1336,10 +1342,15 @@ app.get('/api/exportar-upseller', async (req, res) => {
                 const estoqueReal = parseInt(ativos[0].saldoFisicoTotal) || 0;
                 mapaEstoqueReal.set(chave, estoqueReal);
                 
-                // REGRA 3: SKUs ÓRFÃOS (Existe no Bling, não existe na UpSeller)
-                if (!skusUpSellerMap.has(chave) && estoqueReal > 0) {
-                    qtdAnomalias++;
-                    logAnomalias += `- FALTA NA UPSELLER: "${ativos[0].descricao}" existe no Bling com ${estoqueReal} peças, mas não no catálogo UpSeller.\n`;
+                const upSellerInfo = skusUpSellerMap.get(chave);
+                if (!upSellerInfo) {
+                    if (estoqueReal > 0) {
+                        qtdOrfaos++;
+                        logOrfaos += `- FALTA NA UPSELLER: "${ativos[0].descricao}" existe no Bling com ${estoqueReal} peças, mas não no catálogo UpSeller.\n`;
+                    }
+                } else if (!upSellerInfo.armazem) {
+                    qtdSemArmazem++;
+                    logSemArmazem += `- SEM ARMAZÉM: O SKU "${upSellerInfo.sku}" ("${ativos[0].descricao}") está na UpSeller mas a coluna Armazém está vazia.\n`;
                 }
             }
         }
@@ -1368,7 +1379,10 @@ app.get('/api/exportar-upseller', async (req, res) => {
         };
 
         if (catalogoUpSeller && catalogoUpSeller.skus) {
-            for (const skuReal of catalogoUpSeller.skus) {
+            for (const item of catalogoUpSeller.skus) {
+                const skuReal = typeof item === 'string' ? item : item.sku;
+                const armazem = typeof item === 'string' ? '' : item.armazem;
+
                 if (refsQuery && refsQuery.length > 0) {
                     const refDoSku = extrairRefEstrita(skuReal);
                     if (!refDoSku || !refsQuery.includes(refDoSku)) continue;
@@ -1382,7 +1396,7 @@ app.get('/api/exportar-upseller', async (req, res) => {
 
                 const chaveUpSeller = normalizarChaveMatch(parsed.ref, parsed.cor, parsed.tam);
 
-                if (anomaliasDuplicatas.has(chaveUpSeller)) {
+                if (anomaliasDuplicatas.has(chaveUpSeller) || !armazem) {
                     dadosPlanilha.push([skuReal, "", 0, ""]);
                     continue;
                 }
@@ -1440,9 +1454,12 @@ app.get('/api/exportar-upseller', async (req, res) => {
         relatorioFinal += `- Peças Baixas/Zeradas (Saldo real)..: ${qtdZerado}\n`;
         relatorioFinal += `- Peças tipo Kit.....................: ${qtdKit}\n`;
         relatorioFinal += `- Ignorados (Sem match/Inválidos)....: ${qtdSemMatch}\n`;
-        relatorioFinal += `- Anomalias (Duplicatas/Órfãos)......: ${qtdAnomalias}\n`;
+        relatorioFinal += `- Anomalias (Duplicatas/Órfãos)......: ${qtdAnomalias + qtdOrfaos}\n`;
+        relatorioFinal += `- SKUs Sem Armazém...................: ${qtdSemArmazem}\n`;
         relatorioFinal += `----------------------------------------------------\n`;
 
+        if (qtdOrfaos > 0) relatorioFinal += logOrfaos;
+        if (qtdSemArmazem > 0) relatorioFinal += logSemArmazem;
         if (qtdAnomalias > 0) relatorioFinal += logAnomalias;
         if (qtdAtivo > 0) relatorioFinal += logRepostos;
         if (qtdZerado > 0) relatorioFinal += logBaixos;
@@ -1701,7 +1718,7 @@ app.get('/api/alerta-estoque', async (req, res) => {
 
     // Filtra apenas SKUs que existem no catálogo UpSeller (marketplace ativo)
     const catalogoUpseller = lerCatalogoUpSeller();
-    const skusUpseller = catalogoUpseller?.skus ? new Set(catalogoUpseller.skus.map(s => s.toLowerCase())) : null;
+    const skusUpseller = catalogoUpseller?.skus ? new Set(catalogoUpseller.skus.map(s => (typeof s === 'string' ? s : s.sku).toLowerCase())) : null;
 
     let produtosAlerta = cacheProdutos.filter(p => {
       if (p.saldoFisicoTotal > CONFIG.limiteMax) return false;
@@ -1853,12 +1870,14 @@ app.post('/api/upseller/upload-catalogo', upload.single('arquivo'), async (req, 
     // Detecta a coluna de SKU (primeira coluna que contenha "SKU" no header)
     const headers = Object.keys(rows[0]);
     const skuCol = headers.find(h => h.toUpperCase().includes('SKU')) || headers[0];
+    const armazemCol = headers.find(h => h.toUpperCase().includes('ARMAZ') || h.toUpperCase().includes('WAREHOUSE'));
 
     const skus = [];
     for (const row of rows) {
       const sku = String(row[skuCol] || '').trim();
+      const armazem = armazemCol ? String(row[armazemCol] || '').trim() : '';
       if (sku && sku.length > 1) {
-        skus.push(sku);
+        skus.push({ sku, armazem });
       }
     }
 
