@@ -1286,8 +1286,9 @@ app.get('/api/exportar-upseller', async (req, res) => {
         let logBaixos = `\n🔴 PEÇAS BAIXAS/ZERADAS (SALDO REAL | ESTOQUE < ${LIMIAR_SEGURANCA})\n----------------------------------------------------\n`;
         let logKits = `\n⚠️ KITS (ENVIADO PADRÃO 100)\n----------------------------------------------------\n`;
         let logSemMatch = `\n❌ SEM MATCH (ZERADOS POR SEGURANÇA)\n----------------------------------------------------\n`;
+        let logQuarentena = `\n⚠️ ANOMALIAS E QUARENTENA DE DADOS (AÇÃO NECESSÁRIA NO BLING/UPSELLER)\n----------------------------------------------------\n`;
 
-        let qtdAtivo = 0, qtdZerado = 0, qtdIgnorados = 0, qtdSemMatch = 0, qtdKit = 0;
+        let qtdAtivo = 0, qtdZerado = 0, qtdIgnorados = 0, qtdSemMatch = 0, qtdKit = 0, qtdQuarentena = 0;
 
         const dadosPlanilha = [[
             "SKU*",
@@ -1310,6 +1311,58 @@ app.get('/api/exportar-upseller', async (req, res) => {
         if (usarCatalogoReal) {
             const mapaBling = construirMapaBling(produtos);
 
+            // --- INÍCIO QUARENTENA DE DADOS (REGRAS A e B) ---
+            const chavesEmQuarentena = new Set();
+            const upSellerSkusMap = new Set();
+            for (const skuReal of catalogoUpSeller.skus) {
+                const parsed = parseUpSellerSku(skuReal);
+                if (parsed) upSellerSkusMap.add(normalizarChaveMatch(parsed.ref, parsed.cor, parsed.tam));
+            }
+
+            const blingAgrupado = new Map();
+            for (const p of produtos) {
+                if (!p.descricao) continue;
+                const matchRef = p.descricao.match(/^(\d+)/);
+                if (!matchRef) continue;
+                const ref = matchRef[1].replace(/^0+/, '');
+                
+                if (refsQuery && refsQuery.length > 0 && !refsQuery.includes(ref)) continue;
+                
+                const matchCor = p.descricao.match(/\bCOR[:\s]+([^,;]+)/i);
+                if (!matchCor) continue;
+                const cor = matchCor[1].trim();
+                const matchTam = p.descricao.match(/\bTAM(?:ANHO)?[:\s]+([^,;\s]+)/i);
+                const tam = matchTam ? matchTam[1].trim() : '';
+                
+                const chave = normalizarChaveMatch(ref, cor, tam);
+                if (!blingAgrupado.has(chave)) blingAgrupado.set(chave, []);
+                blingAgrupado.get(chave).push(p);
+            }
+
+            for (const [chave, listaBling] of blingAgrupado.entries()) {
+                const ativos = listaBling.filter(p => p.tipo === 'V' || (p.tipo === 'P' && listaBling.length === 1));
+                
+                // REGRA B: Duplicidade
+                if (ativos.length > 1) {
+                    qtdQuarentena++;
+                    chavesEmQuarentena.add(chave);
+                    const codigos = ativos.map(v => v.codigo).join(', ');
+                    const nomeVisual = ativos[0].descricao;
+                    logQuarentena += `- DUPLICIDADE: "${nomeVisual}" possui ${ativos.length} SKUs ativos no Bling (${codigos}). Saldo zerado por segurança.\n`;
+                }
+                
+                // REGRA A: Órfãos
+                if (!upSellerSkusMap.has(chave) && ativos.length > 0) {
+                    const estoqueReal = ativos.reduce((acc, p) => acc + (parseInt(p.saldoFisicoTotal) || 0), 0);
+                    if (estoqueReal > 0) {
+                        qtdQuarentena++;
+                        const nomeVisual = ativos[0].descricao;
+                        logQuarentena += `- FALTA NA UPSELLER: "${nomeVisual}" existe no Bling com ${estoqueReal} peças, mas não no catálogo UpSeller.\n`;
+                    }
+                }
+            }
+            // --- FIM QUARENTENA DE DADOS ---
+
             for (const skuReal of catalogoUpSeller.skus) {
                 // BARREIRA DE FERRO: Se tiver filtro ativo, a REF do SKU tem que ser exatamente igual
                 if (refsQuery && refsQuery.length > 0) {
@@ -1322,6 +1375,14 @@ app.get('/api/exportar-upseller', async (req, res) => {
                 const parsed = parseUpSellerSku(skuReal);
                 if (!parsed) {
                     qtdIgnorados++;
+                    continue;
+                }
+
+                const chaveUpSeller = normalizarChaveMatch(parsed.ref, parsed.cor, parsed.tam);
+
+                // APLICA QUARENTENA (Regra B)
+                if (chavesEmQuarentena.has(chaveUpSeller)) {
+                    dadosPlanilha.push([skuReal, "", 0, ""]);
                     continue;
                 }
 
@@ -1419,8 +1480,10 @@ app.get('/api/exportar-upseller', async (req, res) => {
         relatorioFinal += `- Peças Baixas/Zeradas (Saldo real)..: ${qtdZerado}\n`;
         relatorioFinal += `- Peças tipo Kit.....................: ${qtdKit}\n`;
         relatorioFinal += `- Ignorados (Sem match/Inválidos)....: ${qtdSemMatch}\n`;
+        relatorioFinal += `- Quarentena de Dados (Anomalias)....: ${qtdQuarentena}\n`;
         relatorioFinal += `----------------------------------------------------\n\n`;
 
+        if (qtdQuarentena > 0) relatorioFinal += logQuarentena;
         if (qtdAtivo > 0) relatorioFinal += logRepostos;
         if (qtdZerado > 0) relatorioFinal += logBaixos;
         if (qtdKit > 0) relatorioFinal += logKits;
