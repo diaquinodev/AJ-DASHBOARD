@@ -2169,8 +2169,22 @@ wppClient.on("ready", () => {
   console.log("✅ [WhatsApp] Conectado ao grupo 'Estoque Marketplace'!");
 });
 
-wppClient.on("disconnected", (reason) => {
-  console.log("⚠️ [WhatsApp] Desconectado:", reason);
+wppClient.on("disconnected", async (reason) => {
+  console.log(`⚠️ [SRE] Conexão perdida. Motivo: ${reason}. Tentando Auto-Healing em 10s...`);
+  try { await wppClient.destroy(); } catch (e) { /* ignore */ }
+  setTimeout(async () => {
+      console.log(`[SRE] Auto-Healing acionado. Reinicializando bot.`);
+      try { await wppClient.initialize(); } catch (e) { console.error(`[SRE] Falha no Auto-Healing:`, e.message); }
+  }, 10000);
+});
+
+wppClient.on("auth_failure", async (msg) => {
+  console.error(`⚠️ [SRE] Falha de autenticação. Tentando Auto-Healing em 10s... | Detalhe:`, msg);
+  try { await wppClient.destroy(); } catch (e) { /* ignore */ }
+  setTimeout(async () => {
+      console.log(`[SRE] Auto-Healing acionado. Reinicializando bot após falha de auth.`);
+      try { await wppClient.initialize(); } catch (e) { console.error(`[SRE] Falha no Auto-Healing:`, e.message); }
+  }, 10000);
 });
 
 // 📩 Listener de comandos no grupo WhatsApp (registrado ANTES do initialize)
@@ -2181,6 +2195,8 @@ const GRUPOS_COMANDO_CACHE = [
   'Estoque Marketplace',
   'Estoque Base de Reposição'
 ];
+// IDs imutáveis (deixar vazio e preencher via console.log do DEBUG para transição segura)
+const GRUPOS_CACHE_IDS = [];
 
 wppClient.on('message_create', async (msg) => {
   try {
@@ -2194,13 +2210,20 @@ wppClient.on('message_create', async (msg) => {
     const chat = await msg.getChat();
     if (!chat.isGroup) return;
 
+    // --- REGRAS SRE: LOG DE TRANSIÇÃO E IDs IMUTÁVEIS ---
+    console.log(`[DEBUG WhatsApp] Grupo: "${chat.name}" | ID Oficial: ${chat.id._serialized}`);
+
+    const idGrupoRemetente = chat.id._serialized;
+    const isGrupoSede = (chat.name === CONFIG.whatsapp.nomeDoGrupoSede) || (CONFIG.whatsapp.idGrupoSede && idGrupoRemetente === CONFIG.whatsapp.idGrupoSede);
+    const isGrupoCache = GRUPOS_COMANDO_CACHE.includes(chat.name) || GRUPOS_CACHE_IDS.includes(idGrupoRemetente);
+
     const partes = texto.split(/\s+/);
     const arg = partes[1] || null;
 
     // ─────────────────────────────────────────────────────────
     // 🏪 GRUPO "Sede Giovana" — consulta em TEMPO REAL na API
     // ─────────────────────────────────────────────────────────
-    if (chat.name === CONFIG.whatsapp.nomeDoGrupoSede) {
+    if (isGrupoSede) {
       if (!arg) {
         await chat.sendMessage('📋 *Uso:* !estoque <referência>\nEx: !estoque 180');
         return;
@@ -2228,7 +2251,7 @@ wppClient.on('message_create', async (msg) => {
     // ─────────────────────────────────────────────────────────
     // 📦 GRUPOS COM CACHE — Marketplace + Base de Reposição
     // ─────────────────────────────────────────────────────────
-    if (!GRUPOS_COMANDO_CACHE.includes(chat.name)) return;
+    if (!isGrupoCache) return;
 
     console.log(`\n📩 [WhatsApp] Comando recebido: "${msg.body}"`);
     _processandoComando = true;
