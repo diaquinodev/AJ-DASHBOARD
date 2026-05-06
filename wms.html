@@ -493,45 +493,39 @@
             overlay.classList.remove('hidden');
             overlay.classList.add('flex');
 
-            let errosEncontrados = 0;
+            progressoTexto.innerText = `Processando lote de ${loteDeEntrada.length} SKUs...`;
+            progressoBarra.style.width = `50%`;
 
-            for (let i = 0; i < loteDeEntrada.length; i++) {
-                const item = loteDeEntrada[i];
-                progressoTexto.innerText = `Enviando ${i + 1} de ${loteDeEntrada.length}... (${item.codigo})`;
-                progressoBarra.style.width = `${Math.round(((i) / loteDeEntrada.length) * 100)}%`;
+            try {
+                const response = await fetch('/api/wms/entrada-lote', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ lote: loteDeEntrada, operacao: operacaoAtual })
+                });
+                const result = await response.json();
+                
+                progressoBarra.style.width = `100%`;
+                await new Promise(r => setTimeout(r, 500)); 
 
-                try {
-                    const response = await fetch('/api/wms/entrada', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ idProduto: item.id, quantidade: item.quantidade, operacao: operacaoAtual })
-                    });
-                    const result = await response.json();
-                    if (result.erro) errosEncontrados++;
-                } catch (e) {
-                    errosEncontrados++;
+                overlay.classList.add('hidden');
+                overlay.classList.remove('flex');
+
+                if (result.sucesso) {
+                    tocarSucesso();
+                    alert("🎉 Lote salvo com sucesso no Bling!");
+                    loteDeEntrada = []; 
+                    atualizarInterfaceLote();
+                    document.getElementById('produto-card').classList.add('hidden');
+                    document.getElementById('estado-vazio').classList.remove('hidden');
+                    alterarStatus("Lote finalizado! Pronto para o próximo...", 'sucesso');
+                } else {
+                    throw new Error(result.erro || "Falha desconhecida na API");
                 }
-                await new Promise(r => setTimeout(r, 400)); 
-            }
-
-            progressoBarra.style.width = `100%`;
-            await new Promise(r => setTimeout(r, 500)); 
-
-            overlay.classList.add('hidden');
-            overlay.classList.remove('flex');
-
-            if (errosEncontrados === 0) {
-                alert("🎉 Lote salvo com sucesso no Bling!");
-                loteDeEntrada = []; 
-                atualizarInterfaceLote();
-                document.getElementById('produto-card').classList.add('hidden');
-                document.getElementById('estado-vazio').classList.remove('hidden');
-                alterarStatus("Lote finalizado! Pronto para o próximo...", 'sucesso');
-            } else {
-                alert(`⚠️ O lote foi processado, mas ${errosEncontrados} itens falharam.`);
-                loteDeEntrada = [];
-                atualizarInterfaceLote();
-                alterarStatus("Finalizado com alertas.", 'erro');
+            } catch (e) {
+                overlay.classList.add('hidden');
+                overlay.classList.remove('flex');
+                alert(`⚠️ Erro ao enviar lote para o Bling:\n${e.message}`);
+                alterarStatus("Falha na sincronização.", 'erro');
             }
         }
 

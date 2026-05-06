@@ -2009,6 +2009,44 @@ app.post('/api/wms/entrada', async (req, res) => {
   }
 });
 
+app.post('/api/wms/entrada-lote', async (req, res) => {
+  try {
+    const { lote, operacao } = req.body;
+    if (!lote || !Array.isArray(lote) || lote.length === 0) {
+      return res.status(400).json({ erro: 'Lote vazio ou inválido.' });
+    }
+
+    const tipoOperacao = operacao === 'S' ? 'S' : 'E';
+    const depositoId = DEPOSITO_SEDE_ID;
+    
+    // Constrói array no formato exato da API V3
+    const payloadBling = lote.map(item => ({
+      produto: { id: parseInt(item.id) },
+      deposito: { id: depositoId },
+      operacao: tipoOperacao,
+      quantidade: parseFloat(item.quantidade),
+      observacoes: tipoOperacao === 'E' ? "Entrada em Lote via WMS Local" : "Saída/Correção em Lote via WMS Local"
+    }));
+
+    const token = await obterAccessToken();
+    
+    await axios.post("https://api.bling.com.br/Api/v3/estoques", payloadBling, { 
+      headers: { Authorization: `Bearer ${token}` }, 
+      timeout: 30000 // Timeout maior para requisição em lote
+    });
+
+    // Atualiza cache local instantaneamente
+    lote.forEach(item => {
+      atualizarCacheEstoque(parseInt(item.id), parseFloat(item.quantidade), tipoOperacao);
+    });
+
+    res.json({ sucesso: true, total: lote.length });
+  } catch (error) {
+    console.error(`⚠️ [WMS] Erro na movimentação em lote:`, error.response?.data || error.message);
+    res.status(500).json({ erro: 'Erro ao salvar lote no Bling' });
+  }
+});
+
 // Descobre o IP local da máquina na rede
 const os = require("os");
 function obterIPLocal() {
