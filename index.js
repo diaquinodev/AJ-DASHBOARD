@@ -1281,6 +1281,11 @@ app.get('/api/exportar-upseller', async (req, res) => {
         if (refsQuery) console.log(`   [UpSeller] 🎯 LOTE ATIVADO (Barreira de Ferro): [${refsQuery.join(', ')}]`);
 
         const catalogoUpSeller = lerCatalogoUpSeller();
+        if (!catalogoUpSeller || !catalogoUpSeller.skus || catalogoUpSeller.skus.length === 0) {
+            console.log(`[Aviso] Tentativa de exportação, mas o catálogo base da UpSeller não foi carregado na memória.`);
+            return res.status(400).json({ erro: "O catálogo base da UpSeller não está carregado. Faça o upload da planilha primeiro." });
+        }
+        
         const skusUpSellerMap = new Map();
         if (catalogoUpSeller && catalogoUpSeller.skus) {
             catalogoUpSeller.skus.forEach(item => {
@@ -1384,8 +1389,12 @@ app.get('/api/exportar-upseller', async (req, res) => {
                 const armazem = typeof item === 'string' ? '' : item.armazem;
 
                 if (refsQuery && refsQuery.length > 0) {
-                    const refDoSku = extrairRefEstrita(skuReal);
-                    if (!refDoSku || !refsQuery.includes(refDoSku)) continue;
+                    const temMatch = refsQuery.some(ref => {
+                        // Regex inteligente: ignora zeros à esquerda, e exige que o próximo caractere após a ref não seja um número (evita que 3 ache 31)
+                        const regex = new RegExp(`^0*${ref}(?:[^0-9]|$)`, 'i');
+                        return regex.test(skuReal);
+                    });
+                    if (!temMatch) continue;
                 }
 
                 const parsed = parseUpSellerSku(skuReal);
