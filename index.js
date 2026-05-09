@@ -144,6 +144,9 @@ function extractAttributes(skuString, isBling = false) {
         if (matchCor) cor = limpaAtributo(matchCor[1].split(/\bTAM/i)[0]);
         const matchTam = skuString.match(/\bTAM(?:ANHO)?[:\s]+([^,;\s]+)/i);
         if (matchTam) tamanho = limpaAtributo(matchTam[1]);
+        
+        // REGRA DE NEGÓCIO: Fallback Absoluto para Tamanho M se vazio
+        if (!tamanho) tamanho = 'm';
     } else {
         const partes = skuString.split('-');
         if (partes.length >= 1) {
@@ -1359,23 +1362,12 @@ app.get('/api/exportar-upseller', async (req, res) => {
             const attrsBling = extractAttributes(p.descricao, true);
             let chave = `${attrsBling.ref}|${attrsBling.cor}|${attrsBling.tamanho}`;
 
-            // Validação Cruzada: Tolerância de Tamanho Nulo e Alertas
+            // Aviso visual no console se tamanho divergir (match de Ref + Cor, mas Tam diferente)
             if (!skusUpSellerMap.has(chave)) {
                 for (const [chaveUp, infoUp] of skusUpSellerMap.entries()) {
-                    if (infoUp.attrs.ref === attrsBling.ref && infoUp.attrs.cor === attrsBling.cor) {
-                        
-                        // REGRA 3.1: TOLERÂNCIA DE TAMANHO NULO (Bypass)
-                        // Se o Bling não informou tamanho, aprova o match assumindo o tamanho da UpSeller
-                        if (!attrsBling.tamanho) {
-                            console.log(`[Match Bypass] Tolerância de Tamanho Ativada! Bling não informou tamanho para Ref: ${attrsBling.ref} Cor: ${attrsBling.cor}. Assumindo UpSeller: "${infoUp.attrs.tamanho}"`);
-                            chave = chaveUp; // Herdando a chave da UpSeller para forçar o Match
-                            break;
-                        } 
-                        // REGRA 3.2: DIVERGÊNCIA DE TAMANHOS
-                        // Se ambos possuem tamanho preenchido, mas são diferentes, mantém o bloqueio e emite aviso
-                        else if (infoUp.attrs.tamanho !== attrsBling.tamanho) {
-                            console.log(`[Aviso Match] A Ref e Cor batem, mas o tamanho divergiu! Bling="${attrsBling.tamanho}" | UpSeller="${infoUp.attrs.tamanho}" (SKU: ${infoUp.sku})`);
-                        }
+                    if (infoUp.attrs.ref === attrsBling.ref && infoUp.attrs.cor === attrsBling.cor && infoUp.attrs.tamanho !== attrsBling.tamanho) {
+                        console.log(`[Aviso Match] A Ref e Cor batem, mas o tamanho divergiu! Bling="${attrsBling.tamanho}" | UpSeller="${infoUp.attrs.tamanho}" (SKU: ${infoUp.sku})`);
+                        break;
                     }
                 }
             }
