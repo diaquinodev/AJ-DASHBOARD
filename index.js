@@ -126,6 +126,18 @@ function removerAcentos(str) {
   return str.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
 }
 
+// Sanitização de Fuzzy Matching (remove tudo que não for letra/número)
+function normalizeSku(str) {
+  if (!str) return '';
+  let limpo = removerAcentos(str.toLowerCase());
+  limpo = limpo.replace(/cor[:\s]+/g, '').replace(/tam(?:anho)?[:\s]+/g, '');
+  limpo = limpo.replace(/\bbebe\b/g, 'bb'); // mantem normalização do "bebe"
+  limpo = limpo.replace(/\brc\b/g, '');     // mantem exclusao do "rc"
+  limpo = limpo.replace(/[^a-z0-9]/g, '');
+  limpo = limpo.replace(/^0+/, ''); // Remove zeros à esquerda
+  return limpo;
+}
+
 // Normaliza uma chave para matching (remove zeros à esquerda, acentos, lowercase, trim)
 function normalizarChaveMatch(ref, cor, tam) {
   const refNorm = String(parseInt(ref) || ref).trim();
@@ -1291,8 +1303,9 @@ app.get('/api/exportar-upseller', async (req, res) => {
             catalogoUpSeller.skus.forEach(item => {
                 const sku = typeof item === 'string' ? item : item.sku;
                 const armazem = typeof item === 'string' ? '' : item.armazem;
-                const parsed = parseUpSellerSku(sku);
-                if (parsed) skusUpSellerMap.set(normalizarChaveMatch(parsed.ref, parsed.cor, parsed.tam), { sku, armazem });
+                // FUZZY MATCHING: Sanitiza a string inteira, removendo traços, espaços e barras
+                const chaveFuzzy = normalizeSku(sku);
+                skusUpSellerMap.set(chaveFuzzy, { sku, armazem });
             });
         }
 
@@ -1317,7 +1330,8 @@ app.get('/api/exportar-upseller', async (req, res) => {
             // Só agrupa variações com cor
             if (!cor) continue;
 
-            const chave = normalizarChaveMatch(ref, cor, tam);
+            // FUZZY MATCHING: Funde ref+cor+tam e sanitiza da mesma forma que o UpSeller
+            const chave = normalizeSku(`${ref}${cor}${tam}`);
             if (!blingAgrupado.has(chave)) blingAgrupado.set(chave, []);
             blingAgrupado.get(chave).push(p);
         }
@@ -1397,13 +1411,8 @@ app.get('/api/exportar-upseller', async (req, res) => {
                     if (!temMatch) continue;
                 }
 
-                const parsed = parseUpSellerSku(skuReal);
-                if (!parsed) {
-                    qtdIgnorados++;
-                    continue;
-                }
-
-                const chaveUpSeller = normalizarChaveMatch(parsed.ref, parsed.cor, parsed.tam);
+                // FUZZY MATCHING: Usa a chave sanitizada (ignora formatações humanas erradas)
+                const chaveUpSeller = normalizeSku(skuReal);
 
                 if (anomaliasDuplicatas.has(chaveUpSeller) || !armazem) {
                     dadosPlanilha.push([skuReal, "", 0, ""]);
