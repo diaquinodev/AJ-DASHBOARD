@@ -126,16 +126,41 @@ function removerAcentos(str) {
   return str.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
 }
 
-// Sanitização de Fuzzy Matching (remove tudo que não for letra/número)
-function normalizeSku(str) {
+function limpaAtributo(str) {
   if (!str) return '';
-  let limpo = removerAcentos(str.toLowerCase());
-  limpo = limpo.replace(/cor[:\s]+/g, '').replace(/tam(?:anho)?[:\s]+/g, '');
-  limpo = limpo.replace(/\bbebe\b/g, 'bb'); // mantem normalização do "bebe"
-  limpo = limpo.replace(/\brc\b/g, '');     // mantem exclusao do "rc"
-  limpo = limpo.replace(/[^a-z0-9]/g, '');
-  limpo = limpo.replace(/^0+/, ''); // Remove zeros à esquerda
-  return limpo;
+  let s = removerAcentos(str.toLowerCase());
+  s = s.replace(/\bbebe\b/g, 'bb'); 
+  s = s.replace(/\brc\b/g, '');     
+  return s.replace(/[^a-z0-9]/g, '');
+}
+
+// Extrator de Componentes (Focado e Ignora Nomes de Produto)
+function extractAttributes(skuString, isBling = false) {
+    let ref = '', cor = '', tamanho = '';
+    if (isBling) {
+        const matchRef = skuString.match(/^(\d+)/);
+        if (matchRef) ref = matchRef[1].replace(/^0+/, '');
+        const matchCor = skuString.match(/\bCOR[:\s]+([^,;]+)/i);
+        if (matchCor) cor = limpaAtributo(matchCor[1].split(/\bTAM/i)[0]);
+        const matchTam = skuString.match(/\bTAM(?:ANHO)?[:\s]+([^,;\s]+)/i);
+        if (matchTam) tamanho = limpaAtributo(matchTam[1]);
+    } else {
+        const partes = skuString.split('-');
+        if (partes.length >= 1) {
+            const matchRef = partes[0].match(/(\d+)/);
+            if (matchRef) ref = matchRef[1].replace(/^0+/, '');
+        }
+        if (partes.length >= 3) {
+            tamanho = limpaAtributo(partes[partes.length - 1]);
+            cor = limpaAtributo(partes[partes.length - 2]);
+        } else if (partes.length === 2) {
+            cor = limpaAtributo(partes[1]);
+        } else {
+            const matchRef = skuString.match(/^0*(\d+)/);
+            if (matchRef) ref = matchRef[1];
+        }
+    }
+    return { ref, cor, tamanho };
 }
 
 // Normaliza uma chave para matching (remove zeros à esquerda, acentos, lowercase, trim)
@@ -1303,9 +1328,10 @@ app.get('/api/exportar-upseller', async (req, res) => {
             catalogoUpSeller.skus.forEach(item => {
                 const sku = typeof item === 'string' ? item : item.sku;
                 const armazem = typeof item === 'string' ? '' : item.armazem;
-                // FUZZY MATCHING: Sanitiza a string inteira, removendo traços, espaços e barras
-                const chaveFuzzy = normalizeSku(sku);
-                skusUpSellerMap.set(chaveFuzzy, { sku, armazem });
+                // EXTRAÇÃO POR COMPONENTES: Quebra e padroniza Ref, Cor, Tam ignorando nome do produto
+                const attrs = extractAttributes(sku, false);
+                const chaveComponente = `${attrs.ref}|${attrs.cor}|${attrs.tamanho}`;
+                skusUpSellerMap.set(chaveComponente, { sku, armazem, attrs });
             });
         }
 
@@ -1330,8 +1356,19 @@ app.get('/api/exportar-upseller', async (req, res) => {
             // Só agrupa variações com cor
             if (!cor) continue;
 
-            // FUZZY MATCHING: Funde ref+cor+tam e sanitiza da mesma forma que o UpSeller
-            const chave = normalizeSku(`${ref}${cor}${tam}`);
+            const attrsBling = extractAttributes(p.descricao, true);
+            const chave = `${attrsBling.ref}|${attrsBling.cor}|${attrsBling.tamanho}`;
+
+            // Aviso visual no console se tamanho divergir (match de Ref + Cor, mas Tam diferente)
+            if (!skusUpSellerMap.has(chave)) {
+                for (const [chaveUp, infoUp] of skusUpSellerMap.entries()) {
+                    if (infoUp.attrs.ref === attrsBling.ref && infoUp.attrs.cor === attrsBling.cor && infoUp.attrs.tamanho !== attrsBling.tamanho) {
+                        console.log(`[Aviso Match] A Ref e Cor batem, mas o tamanho divergiu! Bling="${attrsBling.tamanho}" | UpSeller="${infoUp.attrs.tamanho}" (SKU: ${infoUp.sku})`);
+                        break;
+                    }
+                }
+            }
+
             if (!blingAgrupado.has(chave)) blingAgrupado.set(chave, []);
             blingAgrupado.get(chave).push(p);
         }
@@ -1411,8 +1448,9 @@ app.get('/api/exportar-upseller', async (req, res) => {
                     if (!temMatch) continue;
                 }
 
-                // FUZZY MATCHING: Usa a chave sanitizada (ignora formatações humanas erradas)
-                const chaveUpSeller = normalizeSku(skuReal);
+                // MATCH POR COMPONENTES: Usa a chave isolada por Ref+Cor+Tam
+                const attrsUpSeller = extractAttributes(skuReal, false);
+                const chaveUpSeller = `${attrsUpSeller.ref}|${attrsUpSeller.cor}|${attrsUpSeller.tamanho}`;
 
                 if (anomaliasDuplicatas.has(chaveUpSeller) || !armazem) {
                     dadosPlanilha.push([skuReal, "", 0, ""]);
