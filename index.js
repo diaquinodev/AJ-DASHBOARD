@@ -1696,7 +1696,7 @@ app.post('/api/exportar-tiktok', upload.single('arquivo'), async (req, res) => {
         const newWorkbook = xlsx.utils.book_new();
         xlsx.utils.book_append_sheet(newWorkbook, newWorksheet, sheetName);
         
-        const csvBuffer = xlsx.write(newWorkbook, { bookType: 'csv', type: 'buffer' });
+        const excelBuffer = xlsx.write(newWorkbook, { bookType: 'xlsx', type: 'buffer' });
 
         const dataAtual = new Date().toISOString().slice(0,10);
         res.setHeader('Content-Disposition', `attachment; filename="TikTok_Exportacao_${dataAtual}.zip"`);
@@ -1706,7 +1706,7 @@ app.post('/api/exportar-tiktok', upload.single('arquivo'), async (req, res) => {
         archive.on('error', function(err) { throw err; });
         archive.pipe(res);
         
-        archive.append(csvBuffer, { name: `TikTok_Estoque_${dataAtual}.csv` });
+        archive.append(excelBuffer, { name: `TikTok_Atualizado.xlsx` });
         archive.append(relatorioFinal, { name: `Relatorio_Auditoria_TikTok_${dataAtual}.txt` });
         
         await archive.finalize();
