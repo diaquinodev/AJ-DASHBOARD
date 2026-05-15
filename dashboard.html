@@ -144,19 +144,35 @@
             <!-- NOVA FEATURE: Sincronização TikTok Shop -->
             <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm mb-6 mt-4">
                 <h3 class="text-sm font-bold text-slate-800 mb-1 flex items-center gap-2">
-                    <i data-lucide="shopping-bag" class="w-4 h-4 text-pink-500"></i> TikTok Shop (Lote CSV)
+                    <i data-lucide="shopping-bag" class="w-4 h-4 text-pink-500"></i> TikTok Shop (Memória + Lote)
                 </h3>
-                <p class="text-xs text-slate-500 mb-3">Envie a planilha modelo do TikTok para atualizar automaticamente os saldos baseados no limite de estoque.</p>
-
-                <div class="flex flex-col sm:flex-row gap-3">
-                    <input type="file" id="inputTikTokCsv" accept=".csv,.xlsx,.xls" class="hidden" onchange="sincronizarTikTok(this)">
+                
+                <!-- Parte 1: Upload do Catálogo -->
+                <p class="text-xs text-slate-500 mb-3 mt-3 font-semibold">1. Carregar Planilha Base do TikTok</p>
+                <div class="flex flex-col sm:flex-row gap-3 mb-4">
+                    <input type="file" id="inputTikTokCsv" accept=".csv,.xlsx,.xls" class="hidden" onchange="uploadCatalogoTikTok(this)">
                     <button id="btnUploadTikTok" onclick="document.getElementById('inputTikTokCsv').click()"
-                        class="flex flex-1 items-center justify-center gap-2 bg-pink-600 hover:bg-pink-700 text-white px-5 py-2 rounded-lg font-bold text-sm transition shadow-sm shrink-0">
-                        <i data-lucide="upload-cloud" id="btnTikTokIcon" class="w-4 h-4"></i> <span id="btnTikTokText">Sincronizar Planilha (TikTok)</span>
+                        class="flex items-center justify-center gap-2 bg-pink-600 hover:bg-pink-700 text-white px-5 py-2 rounded-lg font-bold text-sm transition shadow-sm w-full sm:w-auto">
+                        <i data-lucide="upload-cloud" id="btnTikTokIcon" class="w-4 h-4"></i> <span id="btnTikTokText">Subir Catálogo TikTok</span>
+                    </button>
+                </div>
+
+                <!-- Parte 2: Exportação em Lote -->
+                <p class="text-xs text-slate-500 mb-3 font-semibold">2. Fila de Reposição (TikTok)</p>
+                <p class="text-xs text-slate-500 mb-3">Digite as referências ou deixe vazio para exportar tudo.</p>
+                <div class="flex flex-col sm:flex-row gap-3">
+                    <div class="flex-1 flex flex-wrap items-center gap-2 p-2 border-2 border-pink-400 rounded-lg bg-white min-h-[42px]"
+                        id="filaContainerTikTok">
+                        <input type="text" id="inputFilaRefTikTok"
+                            class="flex-1 min-w-[120px] outline-none bg-transparent text-sm text-slate-700"
+                            placeholder="Ex: 104, 31">
+                    </div>
+                    <button id="btnExportarFilaTikTok" onclick="exportarTikTokLote()"
+                        class="flex items-center justify-center gap-2 bg-pink-600 hover:bg-pink-700 text-white px-5 py-2 rounded-lg font-bold text-sm transition shadow-sm shrink-0">
+                        <i data-lucide="download-cloud" class="w-4 h-4"></i> Exportar Lote TikTok
                     </button>
                 </div>
             </div>
-
 
             <div id="loader" class="flex flex-col items-center justify-center py-20">
                 <i data-lucide="loader-2" class="w-8 h-8 text-indigo-500 animate-spin mb-3"></i>
@@ -405,13 +421,13 @@
             }
         }
 
-        async function sincronizarTikTok(input) {
+        async function uploadCatalogoTikTok(input) {
             if (!input.files || !input.files[0]) return;
             const file = input.files[0];
             const btn = document.getElementById('btnUploadTikTok');
             const textoOriginal = document.getElementById('btnTikTokText').textContent;
             
-            document.getElementById('btnTikTokText').textContent = 'Processando...';
+            document.getElementById('btnTikTokText').textContent = 'Enviando...';
             btn.classList.replace('bg-pink-600', 'bg-slate-400');
             btn.disabled = true;
             
@@ -419,38 +435,67 @@
                 const formData = new FormData();
                 formData.append('arquivo', file);
                 
-                const response = await fetch('/api/exportar-tiktok', { method: 'POST', body: formData });
+                const response = await fetch('/api/upload-tiktok', { method: 'POST', body: formData });
+                const data = await response.json();
+                
+                if (response.ok && data.sucesso) {
+                    document.getElementById('btnTikTokText').textContent = `${data.total} SKUs na Memória`;
+                    btn.classList.replace('bg-slate-400', 'bg-green-600');
+                    alert(`Catálogo TikTok carregado!\n${data.total} linhas salvas na memória.`);
+                } else {
+                    alert('Erro: ' + (data.erro || 'Falha no upload'));
+                    document.getElementById('btnTikTokText').textContent = textoOriginal;
+                    btn.classList.replace('bg-slate-400', 'bg-pink-600');
+                }
+            } catch (e) {
+                alert(`Erro ao enviar catálogo: ${e.message}`);
+                document.getElementById('btnTikTokText').textContent = textoOriginal;
+                btn.classList.replace('bg-slate-400', 'bg-pink-600');
+            } finally {
+                btn.disabled = false;
+                input.value = '';
+            }
+        }
+
+        async function exportarTikTokLote() {
+            const inputRefs = document.getElementById('inputFilaRefTikTok').value.trim();
+            const btn = document.getElementById('btnExportarFilaTikTok');
+            
+            // Permite vazio para exportar completo
+            
+            const originalText = btn.innerHTML;
+            btn.innerHTML = `<i data-lucide="loader-2" class="w-4 h-4 animate-spin"></i> Gerando ZIP...`;
+            btn.disabled = true;
+            lucide.createIcons();
+            
+            try {
+                const url = `/api/exportar-tiktok${inputRefs ? `?refs=${encodeURIComponent(inputRefs)}` : ''}`;
+                
+                const response = await fetch(url);
                 if (!response.ok) {
-                    const err = await response.json();
-                    throw new Error(err.erro || "Falha ao gerar arquivo.");
+                    let erroMsg = "Erro ao exportar lote TikTok.";
+                    try {
+                        const errorData = await response.json();
+                        if(errorData.erro) erroMsg = errorData.erro;
+                    } catch(e) {}
+                    throw new Error(erroMsg);
                 }
                 
                 const blob = await response.blob();
-                const url = window.URL.createObjectURL(blob);
+                const objectUrl = window.URL.createObjectURL(blob);
                 const a = document.createElement('a');
-                a.href = url;
-                a.download = `TikTok_Sincronizacao_${new Date().toISOString().slice(0, 10)}.zip`;
+                a.href = objectUrl;
+                a.download = `TikTok_Exportacao_${new Date().toISOString().slice(0, 10)}.zip`;
                 document.body.appendChild(a);
                 a.click();
                 a.remove();
-                window.URL.revokeObjectURL(url);
-                
-                document.getElementById('btnTikTokText').textContent = 'Concluído! Baixando...';
-                btn.classList.replace('bg-slate-400', 'bg-green-600');
-                
-                setTimeout(() => {
-                    document.getElementById('btnTikTokText').textContent = textoOriginal;
-                    btn.classList.replace('bg-green-600', 'bg-pink-600');
-                    btn.disabled = false;
-                }, 3000);
-
-            } catch (e) {
-                alert(`Erro: ${e.message}`);
-                document.getElementById('btnTikTokText').textContent = textoOriginal;
-                btn.classList.replace('bg-slate-400', 'bg-pink-600');
-                btn.disabled = false;
+                window.URL.revokeObjectURL(objectUrl);
+            } catch (error) {
+                alert(error.message);
             } finally {
-                input.value = '';
+                btn.innerHTML = originalText;
+                btn.disabled = false;
+                lucide.createIcons();
             }
         }
 

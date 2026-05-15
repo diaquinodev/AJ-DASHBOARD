@@ -100,7 +100,11 @@ function atualizarCacheEstoque(produtoId, quantidade, operacao) {
 // 📁 CACHE EM DISCO — Catálogo salvo em arquivo para carregamento instantâneo
 const CATALOGO_CACHE_FILE = path.join(__dirname, "catalogo-cache.json");
 const UPSELLER_CATALOGO_FILE = path.join(__dirname, "upseller-catalogo.json");
+// 🕒 CONTROLE DE SINCRONIZAÇÃO - Timer gerenciável com estado exposto
 let sincronizandoCatalogo = false;
+
+// 🗃️ CATÁLOGOS BASE EM MEMÓRIA
+let catalogoTikTok = null;
 
 // 📁 CATÁLOGO UPSELLER — Lista de SKUs reais da UpSeller para matching exato
 function lerCatalogoUpSeller() {
@@ -1554,36 +1558,63 @@ app.get('/api/exportar-upseller', async (req, res) => {
 });
 
 // ──────────────────────────────────────────────
-// 🟢 EXPORTAÇÃO TIKTOK SELLER CENTER (Upload CSV -> Download ZIP)
+// 🟢 UPLOAD DO CATÁLOGO TIKTOK SELLER CENTER
 // ──────────────────────────────────────────────
-app.post('/api/exportar-tiktok', upload.single('arquivo'), async (req, res) => {
-    req.setTimeout(120000);
-    res.setTimeout(120000);
+app.post('/api/upload-tiktok', upload.single('arquivo'), async (req, res) => {
     try {
         if (!req.file) {
             return res.status(400).json({ erro: 'Nenhum arquivo enviado.' });
+        }
+
+        const workbook = xlsx.read(req.file.buffer, { type: 'buffer' });
+        const sheetName = workbook.SheetNames[0];
+        const sheet = workbook.Sheets[sheetName];
+        
+        const rows = xlsx.utils.sheet_to_json(sheet, { defval: '' });
+        if (!rows || rows.length === 0) {
+            return res.status(400).json({ erro: 'Planilha vazia ou formato inválido.' });
+        }
+
+        catalogoTikTok = {
+            sheetName: sheetName,
+            rows: rows
+        };
+
+        console.log(`\n📤 [TikTok] Upload recebido: ${req.file.originalname} | ${rows.length} linhas memorizadas.`);
+        res.json({ sucesso: true, total: rows.length });
+    } catch (e) {
+        console.error("❌ Erro ao ler planilha do TikTok:", e.message);
+        res.status(500).json({ erro: "Erro ao processar o arquivo enviado." });
+    }
+});
+
+// ──────────────────────────────────────────────
+// 🟢 EXPORTAÇÃO TIKTOK SELLER CENTER (Em Lote via Memória)
+// ──────────────────────────────────────────────
+app.get('/api/exportar-tiktok', async (req, res) => {
+    req.setTimeout(120000);
+    res.setTimeout(120000);
+    try {
+        if (!catalogoTikTok || !catalogoTikTok.rows || catalogoTikTok.rows.length === 0) {
+            return res.status(400).json({ erro: 'O catálogo base do TikTok não está carregado. Faça o upload da planilha primeiro.' });
         }
 
         if (!cacheProdutos || cacheProdutos.length === 0) {
             return res.status(400).json({ erro: "Cache de produtos vazio. Aguarde a sincronização em segundo plano." });
         }
 
-        const LIMIAR_SEGURANCA = 30;
-        console.log(`\n📦 [TikTok] Iniciando Exportação... Limiar: ${LIMIAR_SEGURANCA}un`);
-
-        // Lemos o CSV que o usuário enviou
-        const workbook = xlsx.read(req.file.buffer, { type: 'buffer' });
-        const sheetName = workbook.SheetNames[0];
-        const sheet = workbook.Sheets[sheetName];
-        
-        // Lemos como Array de Objetos (JSON)
-        const rows = xlsx.utils.sheet_to_json(sheet, { defval: '' });
-        if (!rows || rows.length === 0) {
-            return res.status(400).json({ erro: 'Planilha vazia ou formato inválido.' });
+        // Lógica de Filtro por Lote (Referências)
+        const refsRaw = req.query.refs;
+        let refsQuery = null;
+        if (refsRaw) {
+            refsQuery = refsRaw.split(',').map(r => r.trim()).filter(r => r.length > 0);
         }
 
-        // Busca dinâmica de colunas (Ignorando nome da loja)
-        const amostra = rows[0];
+        const LIMIAR_SEGURANCA = 30;
+        console.log(`\n📦 [TikTok] Iniciando Exportação... Lote: ${refsQuery ? refsQuery.join(', ') : 'Completo'} | Limiar: ${LIMIAR_SEGURANCA}un`);
+
+        const allRows = catalogoTikTok.rows;
+        const amostra = allRows[0];
         const skuKey = Object.keys(amostra).find(k => k.toLowerCase().includes('sku do vendedor'));
         const qtdKey = Object.keys(amostra).find(k => k.toLowerCase().startsWith('quantidade total'));
 
@@ -1591,7 +1622,7 @@ app.post('/api/exportar-tiktok', upload.single('arquivo'), async (req, res) => {
             return res.status(400).json({ erro: 'Colunas obrigatórias ("SKU do vendedor" e "Quantidade total") não encontradas no CSV.' });
         }
 
-        // Agrupador do Bling (reaproveitado da lógica da UpSeller)
+        // Agrupador do Bling
         const blingAgrupado = new Map();
         for (const p of cacheProdutos) {
             if (!p.descricao) continue;
@@ -1599,9 +1630,12 @@ app.post('/api/exportar-tiktok', upload.single('arquivo'), async (req, res) => {
             if (!matchRef) continue;
             const ref = matchRef[1].replace(/^0+/, '');
             
+            // Aplica filtro Barreira de Ferro no Bling
+            if (refsQuery && refsQuery.length > 0 && !refsQuery.includes(ref)) continue;
+
             const matchCor = p.descricao.match(/\bCOR[:\s]+([^,;]+)/i);
             const cor = matchCor ? matchCor[1].trim() : '';
-            if (!cor) continue; // Só agrupa variações com cor
+            if (!cor) continue;
 
             const attrsBling = extractAttributes(p.descricao, true);
             const chave = `${attrsBling.ref}|${attrsBling.cor}|${attrsBling.tamanho}`;
@@ -1623,33 +1657,45 @@ app.post('/api/exportar-tiktok', upload.single('arquivo'), async (req, res) => {
             if (ativos.length > 1) {
                 qtdAnomalias++;
                 anomaliasDuplicatas.add(chave);
-                mapaEstoqueReal.set(chave, 0); // Força 0
+                mapaEstoqueReal.set(chave, 0);
                 logAnomalias += `- DUPLICIDADE: "${ativos[0].descricao}" possui ${ativos.length} SKUs ativos. Saldo zerado.\n`;
             } else if (ativos.length === 1) {
                 mapaEstoqueReal.set(chave, parseInt(ativos[0].saldoFisicoTotal) || 0);
             }
         }
 
-        for (let i = 0; i < rows.length; i++) {
-            const linha = rows[i];
-            
-            // Garantir que a busca de chave funcione para linhas malformadas
+        // Filtro de Linhas Dinâmico para a Saída do Excel
+        const linhasFiltradas = [];
+        // Adicionamos a linha de cabeçalho na mão caso fosse array, mas já é objeto.
+        // O `json_to_sheet` lerá as chaves do primeiro objeto e fará os headers automáticos.
+        
+        for (let i = 0; i < allRows.length; i++) {
+            const linha = allRows[i];
             const currentQtdKey = Object.keys(linha).find(k => k.toLowerCase().startsWith('quantidade total')) || qtdKey;
             const currentSkuKey = Object.keys(linha).find(k => k.toLowerCase().includes('sku do vendedor')) || skuKey;
-
             const skuVal = linha[currentSkuKey] ? linha[currentSkuKey].toString().trim() : '';
 
-            // Pula linhas de instrução, mas as mantém na planilha final
-            if (!skuVal || skuVal.toLowerCase().includes('não pode ser editado') || skuVal.toLowerCase().includes('nao pode ser editado')) {
+            const isInstrucao = !skuVal || skuVal.toLowerCase().includes('não pode ser editado') || skuVal.toLowerCase().includes('nao pode ser editado');
+            
+            // Sempre repassa as linhas de instrução
+            if (isInstrucao) {
                 qtdInstrucoes++;
+                linhasFiltradas.push(linha);
                 continue; 
             }
 
             const attrsTikTok = extractAttributes(skuVal, false);
+
+            // Filtro de Lote do TikTok
+            if (refsQuery && refsQuery.length > 0 && !refsQuery.includes(attrsTikTok.ref)) {
+                continue; // Linha descartada se não for a Referência solicitada
+            }
+
             const chaveTikTok = `${attrsTikTok.ref}|${attrsTikTok.cor}|${attrsTikTok.tamanho}`;
 
             if (anomaliasDuplicatas.has(chaveTikTok)) {
                 linha[currentQtdKey] = 0;
+                linhasFiltradas.push(linha);
                 continue;
             }
 
@@ -1657,6 +1703,7 @@ app.post('/api/exportar-tiktok', upload.single('arquivo'), async (req, res) => {
                 qtdOrfaos++;
                 logOrfaos += `- FALTA NO BLING: O SKU "${skuVal}" não foi encontrado no Bling ou está fora do padrão.\n`;
                 linha[currentQtdKey] = 0;
+                linhasFiltradas.push(linha);
                 continue;
             }
 
@@ -1671,12 +1718,20 @@ app.post('/api/exportar-tiktok', upload.single('arquivo'), async (req, res) => {
                 qtdZerado++;
                 logBaixos += `- ${skuVal.padEnd(25)} | Real: ${quantidadeReal.toString().padStart(3)} -> Enviado: ${quantidadeReal}\n`;
             }
+
+            linhasFiltradas.push(linha);
+        }
+
+        const totalExportados = qtdAtivo + qtdZerado + qtdOrfaos;
+        if (refsQuery && totalExportados === 0) {
+            return res.status(404).json({ erro: `As referências solicitadas não foram localizadas no catálogo do TikTok em memória.` });
         }
 
         let relatorioFinal = `====================================================\n`;
         relatorioFinal += `📊 RELATÓRIO DE AUDITORIA E EXPORTAÇÃO TIKTOK\n`;
         relatorioFinal += `====================================================\n`;
         relatorioFinal += `Data da Geração: ${new Date().toLocaleString('pt-BR')}\n`;
+        relatorioFinal += `Lote Processado: ${refsQuery ? refsQuery.join(', ') : 'Catálogo Completo'}\n`;
         relatorioFinal += `Regra Base.....: >= ${LIMIAR_SEGURANCA} (Ativa Máscara +2000) | < ${LIMIAR_SEGURANCA} (Envia Real)\n`;
         relatorioFinal += `====================================================\n\n`;
         relatorioFinal += `RESUMO ESTATÍSTICO:\n`;
@@ -1684,7 +1739,7 @@ app.post('/api/exportar-tiktok', upload.single('arquivo'), async (req, res) => {
         relatorioFinal += `- Peças Baixas/Zeradas (Saldo real)..: ${qtdZerado}\n`;
         relatorioFinal += `- Anomalias (Duplicatas Bling).......: ${qtdAnomalias}\n`;
         relatorioFinal += `- Órfãos (Sem match no Bling)........: ${qtdOrfaos}\n`;
-        relatorioFinal += `- Linhas de Instrução Pulas..........: ${qtdInstrucoes}\n`;
+        relatorioFinal += `- Linhas de Instrução Repassadas.....: ${qtdInstrucoes}\n`;
         relatorioFinal += `----------------------------------------------------\n`;
 
         if (qtdOrfaos > 0) relatorioFinal += logOrfaos;
@@ -1692,22 +1747,23 @@ app.post('/api/exportar-tiktok', upload.single('arquivo'), async (req, res) => {
         if (qtdAtivo > 0) relatorioFinal += logRepostos;
         if (qtdZerado > 0) relatorioFinal += logBaixos;
 
-        const newWorksheet = xlsx.utils.json_to_sheet(rows);
+        const newWorksheet = xlsx.utils.json_to_sheet(linhasFiltradas);
         const newWorkbook = xlsx.utils.book_new();
-        xlsx.utils.book_append_sheet(newWorkbook, newWorksheet, sheetName);
+        xlsx.utils.book_append_sheet(newWorkbook, newWorksheet, catalogoTikTok.sheetName || 'Sheet1');
         
         const excelBuffer = xlsx.write(newWorkbook, { bookType: 'xlsx', type: 'buffer' });
 
         const dataAtual = new Date().toISOString().slice(0,10);
-        res.setHeader('Content-Disposition', `attachment; filename="TikTok_Exportacao_${dataAtual}.zip"`);
+        const nomeRef = refsQuery ? `_Lote` : `_Completo`;
+        res.setHeader('Content-Disposition', `attachment; filename="TikTok_Exportacao${nomeRef}_${dataAtual}.zip"`);
         res.setHeader('Content-Type', 'application/zip');
 
         const archive = archiver('zip', { zlib: { level: 9 } });
         archive.on('error', function(err) { throw err; });
         archive.pipe(res);
         
-        archive.append(excelBuffer, { name: `TikTok_Atualizado.xlsx` });
-        archive.append(relatorioFinal, { name: `Relatorio_Auditoria_TikTok_${dataAtual}.txt` });
+        archive.append(excelBuffer, { name: `TikTok_Atualizado${nomeRef}.xlsx` });
+        archive.append(relatorioFinal, { name: `Relatorio_Auditoria_TikTok${nomeRef}.txt` });
         
         await archive.finalize();
         console.log(`✅ [TikTok] ZIP de Exportação gerado!`);
