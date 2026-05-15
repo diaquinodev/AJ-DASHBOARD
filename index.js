@@ -1576,18 +1576,19 @@ app.post('/api/exportar-tiktok', upload.single('arquivo'), async (req, res) => {
         const sheetName = workbook.SheetNames[0];
         const sheet = workbook.Sheets[sheetName];
         
-        // Convertemos para array de arrays (header=1) para manter cabeçalhos e estrutura exata
-        const rows = xlsx.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+        // Lemos como Array de Objetos (JSON)
+        const rows = xlsx.utils.sheet_to_json(sheet, { defval: '' });
         if (!rows || rows.length === 0) {
             return res.status(400).json({ erro: 'Planilha vazia ou formato inválido.' });
         }
 
-        const headerRow = rows[0];
-        const skuIdx = headerRow.findIndex(h => h && h.toString().toLowerCase().includes('sku do vendedor'));
-        const qtdIdx = headerRow.findIndex(h => h && h.toString().toLowerCase().includes('quantidade total'));
+        // Busca dinâmica de colunas (Ignorando nome da loja)
+        const amostra = rows[0];
+        const skuKey = Object.keys(amostra).find(k => k.toLowerCase().includes('sku do vendedor'));
+        const qtdKey = Object.keys(amostra).find(k => k.toLowerCase().startsWith('quantidade total'));
 
-        if (skuIdx === -1 || qtdIdx === -1) {
-            return res.status(400).json({ erro: 'Colunas obrigatórias ("SKU do vendedor" e "Quantidade total") não encontradas no CSV do TikTok.' });
+        if (!skuKey || !qtdKey) {
+            return res.status(400).json({ erro: 'Colunas obrigatórias ("SKU do vendedor" e "Quantidade total") não encontradas no CSV.' });
         }
 
         // Agrupador do Bling (reaproveitado da lógica da UpSeller)
@@ -1629,9 +1630,14 @@ app.post('/api/exportar-tiktok', upload.single('arquivo'), async (req, res) => {
             }
         }
 
-        for (let i = 1; i < rows.length; i++) {
-            const row = rows[i];
-            const skuVal = row[skuIdx] ? row[skuIdx].toString().trim() : '';
+        for (let i = 0; i < rows.length; i++) {
+            const linha = rows[i];
+            
+            // Garantir que a busca de chave funcione para linhas malformadas
+            const currentQtdKey = Object.keys(linha).find(k => k.toLowerCase().startsWith('quantidade total')) || qtdKey;
+            const currentSkuKey = Object.keys(linha).find(k => k.toLowerCase().includes('sku do vendedor')) || skuKey;
+
+            const skuVal = linha[currentSkuKey] ? linha[currentSkuKey].toString().trim() : '';
 
             // Pula linhas de instrução, mas as mantém na planilha final
             if (!skuVal || skuVal.toLowerCase().includes('não pode ser editado') || skuVal.toLowerCase().includes('nao pode ser editado')) {
@@ -1643,25 +1649,25 @@ app.post('/api/exportar-tiktok', upload.single('arquivo'), async (req, res) => {
             const chaveTikTok = `${attrsTikTok.ref}|${attrsTikTok.cor}|${attrsTikTok.tamanho}`;
 
             if (anomaliasDuplicatas.has(chaveTikTok)) {
-                row[qtdIdx] = 0;
+                linha[currentQtdKey] = 0;
                 continue;
             }
 
             if (!mapaEstoqueReal.has(chaveTikTok)) {
                 qtdOrfaos++;
                 logOrfaos += `- FALTA NO BLING: O SKU "${skuVal}" não foi encontrado no Bling ou está fora do padrão.\n`;
-                row[qtdIdx] = 0;
+                linha[currentQtdKey] = 0;
                 continue;
             }
 
             const quantidadeReal = mapaEstoqueReal.get(chaveTikTok);
             if (quantidadeReal >= LIMIAR_SEGURANCA) {
                 const qtdMask = 2000 + quantidadeReal;
-                row[qtdIdx] = qtdMask;
+                linha[currentQtdKey] = qtdMask;
                 qtdAtivo++;
                 logRepostos += `- ${skuVal.padEnd(25)} | Real: ${quantidadeReal.toString().padStart(3)} -> Enviado: ${qtdMask}\n`;
             } else {
-                row[qtdIdx] = quantidadeReal;
+                linha[currentQtdKey] = quantidadeReal;
                 qtdZerado++;
                 logBaixos += `- ${skuVal.padEnd(25)} | Real: ${quantidadeReal.toString().padStart(3)} -> Enviado: ${quantidadeReal}\n`;
             }
@@ -1686,7 +1692,7 @@ app.post('/api/exportar-tiktok', upload.single('arquivo'), async (req, res) => {
         if (qtdAtivo > 0) relatorioFinal += logRepostos;
         if (qtdZerado > 0) relatorioFinal += logBaixos;
 
-        const newWorksheet = xlsx.utils.aoa_to_sheet(rows);
+        const newWorksheet = xlsx.utils.json_to_sheet(rows);
         const newWorkbook = xlsx.utils.book_new();
         xlsx.utils.book_append_sheet(newWorkbook, newWorksheet, sheetName);
         
