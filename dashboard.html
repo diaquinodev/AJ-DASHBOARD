@@ -473,12 +473,12 @@
                 
                 const response = await fetch(url);
                 if (!response.ok) {
-                    let erroMsg = "Erro ao exportar lote TikTok.";
-                    try {
-                        const errorData = await response.json();
-                        if(errorData.erro) erroMsg = errorData.erro;
-                    } catch(e) {}
-                    throw new Error(erroMsg);
+                    const err = await response.json();
+                    alert("Erro: " + err.erro);
+                    btn.innerHTML = originalText;
+                    btn.disabled = false;
+                    lucide.createIcons();
+                    return;
                 }
                 
                 const blob = await response.blob();
@@ -491,7 +491,7 @@
                 a.remove();
                 window.URL.revokeObjectURL(objectUrl);
             } catch (error) {
-                alert(error.message);
+                alert("Falha de rede ou servidor: " + error.message);
             } finally {
                 btn.innerHTML = originalText;
                 btn.disabled = false;
