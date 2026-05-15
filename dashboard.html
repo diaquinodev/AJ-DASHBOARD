@@ -149,7 +149,7 @@
                 <p class="text-xs text-slate-500 mb-3">Envie a planilha modelo do TikTok para atualizar automaticamente os saldos baseados no limite de estoque.</p>
 
                 <div class="flex flex-col sm:flex-row gap-3">
-                    <input type="file" id="inputTikTokCsv" accept=".csv, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, application/vnd.ms-excel, .xlsx" class="hidden" onchange="sincronizarTikTok(this)">
+                    <input type="file" id="inputTikTokCsv" accept=".csv,.xlsx,.xls" class="hidden" onchange="sincronizarTikTok(this)">
                     <button id="btnUploadTikTok" onclick="document.getElementById('inputTikTokCsv').click()"
                         class="flex flex-1 items-center justify-center gap-2 bg-pink-600 hover:bg-pink-700 text-white px-5 py-2 rounded-lg font-bold text-sm transition shadow-sm shrink-0">
                         <i data-lucide="upload-cloud" id="btnTikTokIcon" class="w-4 h-4"></i> <span id="btnTikTokText">Sincronizar Planilha (TikTok)</span>
