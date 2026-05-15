@@ -1554,6 +1554,164 @@ app.get('/api/exportar-upseller', async (req, res) => {
 });
 
 // ──────────────────────────────────────────────
+// 🟢 EXPORTAÇÃO TIKTOK SELLER CENTER (Upload CSV -> Download ZIP)
+// ──────────────────────────────────────────────
+app.post('/api/exportar-tiktok', upload.single('arquivo'), async (req, res) => {
+    req.setTimeout(120000);
+    res.setTimeout(120000);
+    try {
+        if (!req.file) {
+            return res.status(400).json({ erro: 'Nenhum arquivo enviado.' });
+        }
+
+        if (!cacheProdutos || cacheProdutos.length === 0) {
+            return res.status(400).json({ erro: "Cache de produtos vazio. Aguarde a sincronização em segundo plano." });
+        }
+
+        const LIMIAR_SEGURANCA = 30;
+        console.log(`\n📦 [TikTok] Iniciando Exportação... Limiar: ${LIMIAR_SEGURANCA}un`);
+
+        // Lemos o CSV que o usuário enviou
+        const workbook = xlsx.read(req.file.buffer, { type: 'buffer' });
+        const sheetName = workbook.SheetNames[0];
+        const sheet = workbook.Sheets[sheetName];
+        
+        // Convertemos para array de arrays (header=1) para manter cabeçalhos e estrutura exata
+        const rows = xlsx.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+        if (!rows || rows.length === 0) {
+            return res.status(400).json({ erro: 'Planilha vazia ou formato inválido.' });
+        }
+
+        const headerRow = rows[0];
+        const skuIdx = headerRow.findIndex(h => h && h.toString().toLowerCase().includes('sku do vendedor'));
+        const qtdIdx = headerRow.findIndex(h => h && h.toString().toLowerCase().includes('quantidade total'));
+
+        if (skuIdx === -1 || qtdIdx === -1) {
+            return res.status(400).json({ erro: 'Colunas obrigatórias ("SKU do vendedor" e "Quantidade total") não encontradas no CSV do TikTok.' });
+        }
+
+        // Agrupador do Bling (reaproveitado da lógica da UpSeller)
+        const blingAgrupado = new Map();
+        for (const p of cacheProdutos) {
+            if (!p.descricao) continue;
+            const matchRef = p.descricao.match(/^(\d+)/);
+            if (!matchRef) continue;
+            const ref = matchRef[1].replace(/^0+/, '');
+            
+            const matchCor = p.descricao.match(/\bCOR[:\s]+([^,;]+)/i);
+            const cor = matchCor ? matchCor[1].trim() : '';
+            if (!cor) continue; // Só agrupa variações com cor
+
+            const attrsBling = extractAttributes(p.descricao, true);
+            const chave = `${attrsBling.ref}|${attrsBling.cor}|${attrsBling.tamanho}`;
+            
+            if (!blingAgrupado.has(chave)) blingAgrupado.set(chave, []);
+            blingAgrupado.get(chave).push(p);
+        }
+
+        const anomaliasDuplicatas = new Set();
+        const mapaEstoqueReal = new Map();
+        let logAnomalias = `\n⚠️ ANOMALIAS DETECTADAS (DUPLICATAS NO BLING)\n----------------------------------------------------\n`;
+        let logOrfaos = `\n⚠️ SKUS NÃO ENCONTRADOS NO BLING (TikTok -> Bling)\n----------------------------------------------------\n`;
+        let logRepostos = `\n🟢 PEÇAS REPOSTAS (MÁSCARA ATIVADA | ESTOQUE >= ${LIMIAR_SEGURANCA})\n----------------------------------------------------\n`;
+        let logBaixos = `\n🔴 PEÇAS BAIXAS/ZERADAS (SALDO REAL | ESTOQUE < ${LIMIAR_SEGURANCA})\n----------------------------------------------------\n`;
+        let qtdAtivo = 0, qtdZerado = 0, qtdAnomalias = 0, qtdOrfaos = 0, qtdInstrucoes = 0;
+
+        for (const [chave, listaBling] of blingAgrupado.entries()) {
+            const ativos = listaBling.filter(p => p.tipo === 'V' || (p.tipo === 'P' && listaBling.length === 1));
+            if (ativos.length > 1) {
+                qtdAnomalias++;
+                anomaliasDuplicatas.add(chave);
+                mapaEstoqueReal.set(chave, 0); // Força 0
+                logAnomalias += `- DUPLICIDADE: "${ativos[0].descricao}" possui ${ativos.length} SKUs ativos. Saldo zerado.\n`;
+            } else if (ativos.length === 1) {
+                mapaEstoqueReal.set(chave, parseInt(ativos[0].saldoFisicoTotal) || 0);
+            }
+        }
+
+        for (let i = 1; i < rows.length; i++) {
+            const row = rows[i];
+            const skuVal = row[skuIdx] ? row[skuIdx].toString().trim() : '';
+
+            // Pula linhas de instrução, mas as mantém na planilha final
+            if (!skuVal || skuVal.toLowerCase().includes('não pode ser editado') || skuVal.toLowerCase().includes('nao pode ser editado')) {
+                qtdInstrucoes++;
+                continue; 
+            }
+
+            const attrsTikTok = extractAttributes(skuVal, false);
+            const chaveTikTok = `${attrsTikTok.ref}|${attrsTikTok.cor}|${attrsTikTok.tamanho}`;
+
+            if (anomaliasDuplicatas.has(chaveTikTok)) {
+                row[qtdIdx] = 0;
+                continue;
+            }
+
+            if (!mapaEstoqueReal.has(chaveTikTok)) {
+                qtdOrfaos++;
+                logOrfaos += `- FALTA NO BLING: O SKU "${skuVal}" não foi encontrado no Bling ou está fora do padrão.\n`;
+                row[qtdIdx] = 0;
+                continue;
+            }
+
+            const quantidadeReal = mapaEstoqueReal.get(chaveTikTok);
+            if (quantidadeReal >= LIMIAR_SEGURANCA) {
+                const qtdMask = 2000 + quantidadeReal;
+                row[qtdIdx] = qtdMask;
+                qtdAtivo++;
+                logRepostos += `- ${skuVal.padEnd(25)} | Real: ${quantidadeReal.toString().padStart(3)} -> Enviado: ${qtdMask}\n`;
+            } else {
+                row[qtdIdx] = quantidadeReal;
+                qtdZerado++;
+                logBaixos += `- ${skuVal.padEnd(25)} | Real: ${quantidadeReal.toString().padStart(3)} -> Enviado: ${quantidadeReal}\n`;
+            }
+        }
+
+        let relatorioFinal = `====================================================\n`;
+        relatorioFinal += `📊 RELATÓRIO DE AUDITORIA E EXPORTAÇÃO TIKTOK\n`;
+        relatorioFinal += `====================================================\n`;
+        relatorioFinal += `Data da Geração: ${new Date().toLocaleString('pt-BR')}\n`;
+        relatorioFinal += `Regra Base.....: >= ${LIMIAR_SEGURANCA} (Ativa Máscara +2000) | < ${LIMIAR_SEGURANCA} (Envia Real)\n`;
+        relatorioFinal += `====================================================\n\n`;
+        relatorioFinal += `RESUMO ESTATÍSTICO:\n`;
+        relatorioFinal += `- Peças Repostas (Máscara ativa).....: ${qtdAtivo}\n`;
+        relatorioFinal += `- Peças Baixas/Zeradas (Saldo real)..: ${qtdZerado}\n`;
+        relatorioFinal += `- Anomalias (Duplicatas Bling).......: ${qtdAnomalias}\n`;
+        relatorioFinal += `- Órfãos (Sem match no Bling)........: ${qtdOrfaos}\n`;
+        relatorioFinal += `- Linhas de Instrução Pulas..........: ${qtdInstrucoes}\n`;
+        relatorioFinal += `----------------------------------------------------\n`;
+
+        if (qtdOrfaos > 0) relatorioFinal += logOrfaos;
+        if (qtdAnomalias > 0) relatorioFinal += logAnomalias;
+        if (qtdAtivo > 0) relatorioFinal += logRepostos;
+        if (qtdZerado > 0) relatorioFinal += logBaixos;
+
+        const newWorksheet = xlsx.utils.aoa_to_sheet(rows);
+        const newWorkbook = xlsx.utils.book_new();
+        xlsx.utils.book_append_sheet(newWorkbook, newWorksheet, sheetName);
+        
+        const csvBuffer = xlsx.write(newWorkbook, { bookType: 'csv', type: 'buffer' });
+
+        const dataAtual = new Date().toISOString().slice(0,10);
+        res.setHeader('Content-Disposition', `attachment; filename="TikTok_Exportacao_${dataAtual}.zip"`);
+        res.setHeader('Content-Type', 'application/zip');
+
+        const archive = archiver('zip', { zlib: { level: 9 } });
+        archive.on('error', function(err) { throw err; });
+        archive.pipe(res);
+        
+        archive.append(csvBuffer, { name: `TikTok_Estoque_${dataAtual}.csv` });
+        archive.append(relatorioFinal, { name: `Relatorio_Auditoria_TikTok_${dataAtual}.txt` });
+        
+        await archive.finalize();
+        console.log(`✅ [TikTok] ZIP de Exportação gerado!`);
+
+    } catch (e) {
+        console.error("❌ Erro ao exportar ZIP TikTok:", e.message);
+        res.status(500).json({ erro: "Erro interno ao gerar o pacote ZIP TikTok." });
+    }
+});
+// ──────────────────────────────────────────────
 // RESTANTE DO CÓDIGO (DASHBOARD / WMS)
 // ──────────────────────────────────────────────
 

@@ -141,6 +141,23 @@
                 </div>
             </div>
 
+            <!-- NOVA FEATURE: Sincronização TikTok Shop -->
+            <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm mb-6 mt-4">
+                <h3 class="text-sm font-bold text-slate-800 mb-1 flex items-center gap-2">
+                    <i data-lucide="shopping-bag" class="w-4 h-4 text-pink-500"></i> TikTok Shop (Lote CSV)
+                </h3>
+                <p class="text-xs text-slate-500 mb-3">Envie a planilha modelo do TikTok para atualizar automaticamente os saldos baseados no limite de estoque.</p>
+
+                <div class="flex flex-col sm:flex-row gap-3">
+                    <input type="file" id="inputTikTokCsv" accept=".csv" class="hidden" onchange="sincronizarTikTok(this)">
+                    <button id="btnUploadTikTok" onclick="document.getElementById('inputTikTokCsv').click()"
+                        class="flex flex-1 items-center justify-center gap-2 bg-pink-600 hover:bg-pink-700 text-white px-5 py-2 rounded-lg font-bold text-sm transition shadow-sm shrink-0">
+                        <i data-lucide="upload-cloud" id="btnTikTokIcon" class="w-4 h-4"></i> <span id="btnTikTokText">Sincronizar CSV (TikTok)</span>
+                    </button>
+                </div>
+            </div>
+
+
             <div id="loader" class="flex flex-col items-center justify-center py-20">
                 <i data-lucide="loader-2" class="w-8 h-8 text-indigo-500 animate-spin mb-3"></i>
                 <p class="text-slate-400 font-medium text-sm">Sincronizando com o Bling...</p>
@@ -384,6 +401,55 @@
                 document.getElementById('btnUploadTexto').textContent = textoOriginal;
             } finally {
                 btn.disabled = false;
+                input.value = '';
+            }
+        }
+
+        async function sincronizarTikTok(input) {
+            if (!input.files || !input.files[0]) return;
+            const file = input.files[0];
+            const btn = document.getElementById('btnUploadTikTok');
+            const textoOriginal = document.getElementById('btnTikTokText').textContent;
+            
+            document.getElementById('btnTikTokText').textContent = 'Processando...';
+            btn.classList.replace('bg-pink-600', 'bg-slate-400');
+            btn.disabled = true;
+            
+            try {
+                const formData = new FormData();
+                formData.append('arquivo', file);
+                
+                const response = await fetch('/api/exportar-tiktok', { method: 'POST', body: formData });
+                if (!response.ok) {
+                    const err = await response.json();
+                    throw new Error(err.erro || "Falha ao gerar arquivo.");
+                }
+                
+                const blob = await response.blob();
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `TikTok_Sincronizacao_${new Date().toISOString().slice(0, 10)}.zip`;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                window.URL.revokeObjectURL(url);
+                
+                document.getElementById('btnTikTokText').textContent = 'Concluído! Baixando...';
+                btn.classList.replace('bg-slate-400', 'bg-green-600');
+                
+                setTimeout(() => {
+                    document.getElementById('btnTikTokText').textContent = textoOriginal;
+                    btn.classList.replace('bg-green-600', 'bg-pink-600');
+                    btn.disabled = false;
+                }, 3000);
+
+            } catch (e) {
+                alert(`Erro: ${e.message}`);
+                document.getElementById('btnTikTokText').textContent = textoOriginal;
+                btn.classList.replace('bg-slate-400', 'bg-pink-600');
+                btn.disabled = false;
+            } finally {
                 input.value = '';
             }
         }
